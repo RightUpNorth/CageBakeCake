@@ -79,6 +79,31 @@ cage.points[i] = base[i] + normal[i] * slider_value + manual_delta[i]
 artist set a global cage distance and then locally fix problem areas without the two
 controls fighting each other.
 
+## Hard vs soft normals (cage push must use soft)
+
+The low poly and the cage consume normals for different purposes, and conflating
+them tears the cage:
+
+- **Hard normals stay on the low poly.** Splits at hard edges, UV seams, and
+  smoothing-group boundaries are deliberate - the baked tangent-space normal map and
+  tangent basis are authored against exactly those split normals. Never flatten them.
+- **The cage push must use soft (welded) normals.** If the cage is peaked along the
+  low poly's split normals, the coincident points at a seam fly apart in different
+  directions, the shell tears, and bake rays leak through the gap (black spots /
+  skirting). So compute the push direction by **fuse coincident positions ->
+  recompute one averaged normal per welded position -> peak along that**. The cage
+  stays watertight even over a hard-edged low poly.
+- **Why this is legal:** the cage only decides where a ray starts and which way it
+  fires; the low poly decides what normal/tangent is recorded at the hit. They are
+  consumed at different bake stages, so a soft continuous cage (smooth, non-crossing
+  ray directions across a seam) coexists with a hard low poly (sharp transition baked
+  into the map).
+
+Implementation note: the editor currently pushes along the low poly's per-point
+normals, which are soft only because the USD assets are welded. The explicit
+weld-and-average step (and the **skew** hard/soft firing-direction blend) is
+[Milestone 8](milestones/milestone-8-normals-skew.md).
+
 ## Gizmo orientation
 
 The per-vertex gizmo for vertex `i` is oriented to `lowpoly_normals[i]`. The default
