@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Mesh assets: source FBX binaries and derived OBJ/USD are kept local, not in git
+# (large binaries; see docs/environment.md). Re-add intentionally if needed.
+assets/fbx/
+assets/obj/
+assets/usd/
