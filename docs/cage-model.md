@@ -99,10 +99,11 @@ them tears the cage:
   ray directions across a seam) coexists with a hard low poly (sharp transition baked
   into the map).
 
-Implementation note: the editor currently pushes along the low poly's per-point
-normals, which are soft only because the USD assets are welded. The explicit
-weld-and-average step (and the **skew** hard/soft firing-direction blend) is
-[Milestone 8](milestones/milestone-8-normals-skew.md).
+Implementation note: the cage push uses `cage.soft_vertex_normals` (welds coincident
+positions and averages the low poly's normals) - watertight over hard edges,
+identical to the stored normals on a fully welded low poly. The low poly's hard
+normals are kept on the editor (`hard_normals`) for the bake. The **skew** hard/soft
+firing-direction blend is [Milestone 8 Phase 8.2](milestones/milestone-8/phase-2-skew-blend.md).
 
 ## Gizmo orientation
 

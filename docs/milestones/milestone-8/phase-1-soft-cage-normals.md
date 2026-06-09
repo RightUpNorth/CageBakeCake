@@ -7,18 +7,23 @@ watertight over a hard-edged low poly, without altering the low poly's hard norm
 
 ## Tasks
 
-- [ ] Add `cage.soft_vertex_normals(points, faces)` (headless, testable): fuse
-      coincident positions, recompute one area/angle-averaged normal per welded
-      position, and map it back to every coincident point. (fuse -> recompute -> peak)
-- [ ] Use these soft normals for the cage push (`self.normals` for displacement and
-      the gizmo's normal axis), keeping the low poly's own per-point (possibly hard)
-      normals separate for the eventual bake.
-- [ ] Verify watertightness: on a hard-edged test low poly, coincident seam points
-      share a push direction and stay coincident at any offset (no gap).
-- [ ] Confirm the smooth Mat Ball is unchanged (its welded normals already match).
+- [x] Add `cage.soft_vertex_normals(points, normals)` (headless, unit-tested): weld
+      coincident positions and average the normals per welded position, mapping the
+      result back to every coincident point.
+- [x] Use these soft normals for the cage push (`self.normals` for displacement and
+      the gizmo's normal axis); keep the low poly's hard normals on `self.hard_normals`
+      for the eventual bake.
+- [x] Verify watertightness on a synthetic hard-edged tent: coincident ridge verts
+      weld to one normal (the average of the two panels), so they share a push
+      direction at any offset.
+- [x] Confirm the welded Mat Ball is unchanged (soft normals == stored normals).
 
 ## Notes
 
-- This is the fuse->recompute->peak step described in docs/cage-model.md.
-- Keep two normal sets on the editor: soft (cage push) and hard (low poly / bake).
-- Euclidean position weld tolerance should be tight (exact-position or a tiny eps).
+- Implemented by **welding the existing normals** rather than recomputing from faces:
+  on a fully welded low poly each group is one vertex, so the stored normals are
+  returned unchanged (no cage-shape regression); only coincident splits get averaged.
+- Keeps two normal sets on the editor: soft (`normals`, cage push) and hard
+  (`hard_normals`, low poly / bake).
+- The benefit is only visible on a hard-edged low poly (the Mat Ball is fully
+  welded, 0 splits).

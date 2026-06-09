@@ -105,6 +105,30 @@ def soft_weights(
     return idx, weights
 
 
+def soft_vertex_normals(points: np.ndarray, normals: np.ndarray) -> np.ndarray:
+    """Soft (welded) per-vertex normals for the cage push.
+
+    Fuse coincident positions -> average the given normals per welded position ->
+    assign that single normal back to every coincident point. This keeps the cage
+    watertight across hard-edge / UV-seam vertex splits on the low poly (whose own
+    hard normals are passed in and left untouched for baking). See docs/cage-model.md.
+
+    On a fully welded low poly (no coincident points) every group has one vertex, so
+    the input normals are returned unchanged - no change to the cage shape there.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    normals = np.asarray(normals, dtype=np.float64)
+    extent = np.linalg.norm(np.ptp(points, axis=0)) or 1.0
+    quant = np.round(points / (extent * 1e-6))
+    _, group = np.unique(quant, axis=0, return_inverse=True)
+    ngroups = int(group.max()) + 1
+
+    acc = np.zeros((ngroups, 3))
+    np.add.at(acc, group, normals)
+    gnorm = acc / (np.linalg.norm(acc, axis=1, keepdims=True) + 1e-12)
+    return gnorm[group]
+
+
 def tangent_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Two orthonormal vectors spanning the tangent plane perpendicular to normal."""
     n = np.asarray(normal, dtype=np.float64)

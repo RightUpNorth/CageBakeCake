@@ -43,7 +43,10 @@ class CageEditor:
         self._low_path = low_path
         self._cage_path = cage_path
         self.low = meshio.load_mesh(low_path)
-        self.normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
+        # Hard normals stay on the low poly (they author the bake); the cage push uses
+        # soft (welded) normals so the shell is watertight over hard edges. (M8.1)
+        self.hard_normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
+        self.normals = cage.soft_vertex_normals(self.low.points, self.hard_normals)
         self.high = meshio.load_mesh(high_path) if high_path else None
 
         # The cage's rest geometry: a loaded cage (topology-checked) or the low poly.
