@@ -31,16 +31,55 @@ Spike progress (in order):
   (normal) axis to displace, or the tangent plane to slide along the surface. All
   VTK gizmo widgets are available in this build (`vtkAxesTransformWidget`,
   `vtkAxesTransformRepresentation`, `vtkAffineWidget`, `vtkHandleWidget`, etc.).
-- **Approach:** spike ONE axis to confirmed-working before building the full
-  three-axis gizmo (each visual check costs a user round-trip). Candidates:
-  `vtkAxesTransformWidget` (real arrow gizmo, native axis constraint - verify
-  readback + arbitrary-frame orientation first) vs three constrained handles reusing
-  the proven sphere widget + a generalized project-onto-axis. Tangent basis = two
-  unit vectors perpendicular to the normal (via cross products).
+- **`vtkAxesTransformWidget` ruled out:** introspection showed its representation
+  exposes no usable transform readback (`GetTransform` absent), so wiring drag ->
+  vertex motion through it is not viable. Good that this was checked before building.
+- **Chosen for now: constraint-mode toggle on the proven handle.** Reuse the working
+  sphere widget and switch which constraint the drag applies:
+  - `[1]` displace mode -> `cage.project_onto_normal` (in/out along the normal),
+    shown as the red normal axis.
+  - `[2]` slide mode -> `cage.project_onto_plane` (motion in the tangent plane),
+    shown as a green disc.
+  This delivers the requested "displace vs slide along surface" function reliably,
+  with zero custom mouse-interception risk.
 
-Gotchas seen: the free-drag sphere can drift off the normal line while the vertex
-snaps to it (a real axis-constrained gizmo fixes this); the normal line must be
-drawn outward-only as an on-top tube or it hides inside the solid mesh.
+Built on top of the confirmed constraint logic: a **3-arrow gizmo** at the selected
+vertex (blue = displace along normal, red/green = slide in the tangent plane, basis
+from `cage.tangent_basis`). **Hovering an arrow selects that constraint** - the hover
+cell-picker's actor is matched to the arrow by C++ address (validated: a
+`vtkCellPicker` actor matches the stored pyvista actor by `GetAddressAsString`), and
+the arrows follow the vertex during a drag via `SetPosition`. Keys `1`/`2` remain as
+a fallback. This avoids custom drag-math/camera-interception by reusing the proven
+sphere widget for the actual drag.
+
+Now building the grab-the-handle gizmo (the ball is dropped): the handles themselves
+are dragged. Custom manipulator via raw interactor observers (press/move/release at
+priority above the camera style):
+
+- Press over a handle -> begin drag; the camera is suppressed by swapping the
+  interactor style to `vtkInteractorStyleUser` for the duration, plus aborting the
+  press event (`interactor.GetCommand(tag).SetAbortFlag(1)`) so the trackball never
+  starts a rotate. Confirmed available: interactor `GetCommand`, command
+  `SetAbortFlag`. This is the load-bearing mechanism being spiked.
+- Move while dragging -> cursor ray (renderer `DisplayToWorld`) is projected onto the
+  handle's line (`cage.closest_point_on_axis`, normal) or plane
+  (`cage.ray_plane_intersect`, tangent); the resulting target drives the same
+  manual_delta + soft-selection pipeline.
+- Selection happens on a left-click (press+release at the same spot) that is NOT over
+  a handle, so you cannot accidentally select another vertex while dragging.
+- Hover highlights the handle under the cursor (yellow).
+
+Camera suppression confirmed working in the live window (the view stays still while
+dragging a handle). Both handles are now implemented: a **red normal arrow**
+(displace via `closest_point_on_axis`) and a **green tangent-plane ring** (slide via
+`ray_plane_intersect`). Grabbing a handle sets the mode from its address->mode map;
+the drag, gizmo-follow, and soft-selection paths are shared. Selection happens on
+press (pyvista swallows release events; see issue #4976), so dragging empty
+background orbits while clicking the mesh selects.
+
+Gotchas seen: the free-drag sphere can drift off the constraint while the vertex
+snaps to it (the arrow-gizmo polish fixes this); the normal line must be drawn
+outward-only as an on-top tube or it hides inside the solid mesh.
 
 ## Notes
 
