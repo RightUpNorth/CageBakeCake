@@ -35,6 +35,12 @@ implementation has been written yet. See `docs/` for the full design and
 python -m cagebakecake low.obj cage.obj high.obj --hdr env.hdr
 ```
 
+## License
+
+Proprietary and commercial. Copyright (c) 2026 RightUpNorth. All rights reserved.
+See [LICENSE](LICENSE). Use requires a written commercial license agreement;
+contact vanbrusselwim@gmail.com.
+
 ## Documentation
 
 - `docs/environment.md` - Python interpreter, venv, confirmed package versions, FBX status.
