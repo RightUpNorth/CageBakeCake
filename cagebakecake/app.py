@@ -1,9 +1,9 @@
 """Milestone 1 spike: pick a cage vertex and edit it with a grabbable gizmo.
 
-Scope is deliberately small (see docs/milestones/milestone-1-pick-gizmo.md):
-no displacement/opacity sliders, no shader, no HDR, no baking. The cage here is an
-in-memory duplicate of the low poly (the "create cage" idea), pushed out a little so
-it is visible.
+Loads a low poly (the cage matches its topology), a high-poly reference, and
+optionally a cage file; with no cage file the cage is an in-memory copy of the low
+poly pushed out a little. Still no displacement/opacity sliders, no PBR/HDR, no
+baking (later milestones). The [c] key writes a topology-matched cage to disk.
 
 Interaction (custom manipulator - no separate drag ball):
   - Left-click a cage vertex (away from any handle) to select it.
@@ -21,6 +21,9 @@ global slider can layer on top (Milestone 3).
 
 from __future__ import annotations
 
+import os
+import shutil
+
 import numpy as np
 import pyvista as pv
 import vtk
@@ -29,10 +32,27 @@ from . import cage, meshio
 
 
 class CageEditor:
-    def __init__(self, mesh_path: str, global_push: float = 0.03, off_screen: bool = False):
-        self.low = meshio.load_mesh(mesh_path)
-        self.base = np.asarray(self.low.points, dtype=np.float64).copy()
+    def __init__(
+        self,
+        low_path: str,
+        high_path: str | None = None,
+        cage_path: str | None = None,
+        global_push: float = 0.03,
+        off_screen: bool = False,
+    ):
+        self._low_path = low_path
+        self._cage_path = cage_path
+        self.low = meshio.load_mesh(low_path)
         self.normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
+        self.high = meshio.load_mesh(high_path) if high_path else None
+
+        # The cage's rest geometry: a loaded cage (topology-checked) or the low poly.
+        if cage_path:
+            cage_mesh = meshio.load_mesh(cage_path)
+            cage.validate_correspondence(self.low.points, cage_mesh.points)
+            self.base = np.asarray(cage_mesh.points, dtype=np.float64).copy()
+        else:
+            self.base = np.asarray(self.low.points, dtype=np.float64).copy()
         self.global_push = float(global_push)
         self.manual_delta = np.zeros_like(self.base)
         self.selected: int | None = None
@@ -50,6 +70,10 @@ class CageEditor:
         self._saved_style = None
         self._press_tag = None
         self._release_tag = None
+
+        # Undo/redo history of manual_delta snapshots.
+        self._history: list[np.ndarray] = [self.manual_delta.copy()]
+        self._hist_index = 0
 
         # Soft selection (proportional editing).
         self.soft_enabled = False
@@ -81,6 +105,9 @@ class CageEditor:
         )
 
     def _add_actors(self) -> None:
+        # High poly: the opaque, shaded reference the cage wraps (PBR comes in M5).
+        if self.high is not None:
+            self.pl.add_mesh(self.high, color="tan", smooth_shading=True, name="high")
         self.pl.add_mesh(self.low, style="wireframe", color="white", line_width=1, name="low")
         self.cage_actor = self.pl.add_mesh(
             self.cage, color="cyan", opacity=0.35, name="cage", show_edges=False
@@ -228,6 +255,7 @@ class CageEditor:
             self._dragging = False
             self._suppress_camera(False)
             self._abort(obj, self._release_tag)
+            self._push_history()  # commit the completed drag as one undo step
 
     def _apply_drag(self, x: int, y: int) -> None:
         i = self.selected
@@ -313,13 +341,50 @@ class CageEditor:
         self._update_help()
         self.pl.render()
 
+    # --- undo / redo --------------------------------------------------------
+    def _push_history(self) -> None:
+        if np.array_equal(self.manual_delta, self._history[self._hist_index]):
+            return  # no net change (e.g. a grab with no move)
+        del self._history[self._hist_index + 1:]  # drop any redo branch
+        self._history.append(self.manual_delta.copy())
+        self._hist_index = len(self._history) - 1
+
+    def _restore_state(self, state: np.ndarray) -> None:
+        self.manual_delta = state.copy()
+        self._recompose()
+        if self.selected is not None:
+            self._build_gizmo(self.selected)
+            self._rebaseline()
+        self.pl.render()
+
+    def _undo(self) -> None:
+        if self._hist_index > 0:
+            self._hist_index -= 1
+            print(f"[undo] state {self._hist_index}/{len(self._history) - 1}")
+            self._restore_state(self._history[self._hist_index])
+
+    def _redo(self) -> None:
+        if self._hist_index < len(self._history) - 1:
+            self._hist_index += 1
+            print(f"[redo] state {self._hist_index}/{len(self._history) - 1}")
+            self._restore_state(self._history[self._hist_index])
+
+    # --- create cage --------------------------------------------------------
+    def _create_cage(self) -> None:
+        """Duplicate the low-poly asset to <stem>_cage.usd (topology-matched cage)."""
+        stem, ext = os.path.splitext(self._low_path)
+        out = f"{stem}_cage{ext}"
+        shutil.copy(self._low_path, out)
+        self._cage_path = out
+        print(f"[create-cage] wrote {out}")
+
     # --- lifecycle ----------------------------------------------------------
     def _update_help(self) -> None:
         soft_label = f"ON r={self.soft_radius:.2f}" if self.soft_enabled else "OFF"
         self.pl.add_text(
             "Left-click a vertex to select. Drag the RED arrow to displace (normal),\n"
             "the GREEN ring to slide (along surface).\n"
-            "[o] soft-select    [ [ / ] ] radius\n"
+            "[o] soft-select   [ [ / ] ] radius   [z] undo  [y] redo  [c] create-cage\n"
             f"Soft: {soft_label}",
             font_size=10,
             name="help",
@@ -334,6 +399,9 @@ class CageEditor:
         self.pl.add_key_event("o", self._toggle_soft)
         self.pl.add_key_event("bracketleft", lambda: self._scale_radius(1 / 1.25))
         self.pl.add_key_event("bracketright", lambda: self._scale_radius(1.25))
+        self.pl.add_key_event("z", self._undo)
+        self.pl.add_key_event("y", self._redo)
+        self.pl.add_key_event("c", self._create_cage)
         self._update_help()
         self.pl.show()
 
