@@ -61,6 +61,16 @@ Detail and phases: [milestone-7-bake.md](milestones/milestone-7-bake.md)
 encode the high-poly normal into tangent space, write a PNG, preview on the low
 poly. Requires UVs. MVP is a tangent-space normal map only.
 
+## Milestone 8 - Hard/soft normals: watertight cage + skew
+
+Detail and phases: [milestone-8-normals-skew.md](milestones/milestone-8-normals-skew.md)
+
+Cage push uses soft (welded) normals so it stays watertight over a hard-edged low
+poly (fuse -> recompute -> peak), while the low poly keeps its hard normals for the
+bake. Then **skew**: a per-region hard<->soft blend of the ray firing direction
+(the Copernicus / Labs Maps Baker behaviour). Foundational for correct cages on
+hard-surface assets; can be scheduled before Milestone 7.
+
 ## Dependencies
 
 `pyvista`, `numpy`, `trimesh` (+ assimp and embree backends), `imageio`. Pure

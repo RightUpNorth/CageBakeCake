@@ -18,6 +18,10 @@ the high-poly normal at the hit.
 ## Notes
 
 - The cage bound is what prevents capturing surface behind the intended one.
+- Ray *direction* should come from the soft (welded) cage normals, optionally skewed
+  per region between hard and soft - see
+  [Milestone 8](../milestone-8-normals-skew.md). The cage decides the outer bound;
+  skew decides the direction.
 - Without embree this is slow on dense meshes - keep the loop vectorized where
   possible and plan for the progress/cancel stretch goal.
 - Reference: `docs/baking.md` (algorithm steps 1, 4-5).

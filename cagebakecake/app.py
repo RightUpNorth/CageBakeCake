@@ -90,6 +90,7 @@ class CageEditor:
         self._handle_radius = diag * 0.02
         self._axis_len = diag * 0.14
         self.soft_radius = diag * 0.1
+        self._push_max = diag * 0.3
 
         self.pl = pv.Plotter(off_screen=off_screen)
         self._handle_picker = vtk.vtkCellPicker()
@@ -369,6 +370,31 @@ class CageEditor:
             print(f"[redo] state {self._hist_index}/{len(self._history) - 1}")
             self._restore_state(self._history[self._hist_index])
 
+    # --- sliders ------------------------------------------------------------
+    def _gizmo_follow(self) -> None:
+        """Move the gizmo/soft-region to track the selected vertex after the cage
+        geometry changes (slider, undo)."""
+        if self.selected is None:
+            return
+        i = self.selected
+        self._anchor = self.cage.points[i].copy()
+        delta = self.cage.points[i] - self._giz_anchor
+        for actor in self._giz.values():
+            actor.SetPosition(*delta)
+        if self._soft_poly is not None:
+            self._soft_poly.points = self.cage.points[self._aff_idx]
+
+    def _on_push(self, value: float) -> None:
+        """Displacement slider: push the whole cage along normals. Layered on top of
+        per-vertex edits (manual_delta), so those are preserved (see cage.compose)."""
+        self.global_push = float(value)
+        self._recompose()
+        self._gizmo_follow()
+        self.pl.render()
+
+    def _on_opacity(self, value: float) -> None:
+        self.cage_actor.prop.opacity = float(value)
+
     # --- create cage --------------------------------------------------------
     def _create_cage(self) -> None:
         """Duplicate the low-poly asset to <stem>_cage.usd (topology-matched cage)."""
@@ -402,6 +428,16 @@ class CageEditor:
         self.pl.add_key_event("z", self._undo)
         self.pl.add_key_event("y", self._redo)
         self.pl.add_key_event("c", self._create_cage)
+        self.pl.add_slider_widget(
+            self._on_push, [0.0, self._push_max], value=self.global_push,
+            title="cage offset", pointa=(0.025, 0.10), pointb=(0.31, 0.10),
+            style="modern", interaction_event="always",
+        )
+        self.pl.add_slider_widget(
+            self._on_opacity, [0.0, 1.0], value=0.35,
+            title="cage opacity", pointa=(0.69, 0.10), pointb=(0.975, 0.10),
+            style="modern", interaction_event="always",
+        )
         self._update_help()
         self.pl.show()
 
