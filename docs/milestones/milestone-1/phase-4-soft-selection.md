@@ -17,6 +17,15 @@ the spike (not in the original Milestone 1 scope).
 - [ ] Show the falloff region (e.g. color the affected points by weight) so the user
       sees the influence.
 
+## Status
+
+Implemented (`cage.soft_weights` + the editor wiring). Keys: `[o]` toggles soft
+selection, `[` / `]` shrink/grow the radius. The drag applies the handle's world
+move scaled by each neighbour's smoothstep weight (`manual_delta[j] = md0[j] +
+move * w[j]`), and the affected region is shown as points coloured by weight
+(plasma). Verified headless: weights fall off smoothly, only verts within the radius
+move, the centre moves fully; verified visually as a smooth bump on MatBall.
+
 ## Notes
 
 - Works through the same `manual_delta` + `cage.compose` path as single-vertex edits.
