@@ -19,6 +19,22 @@ low poly, and show all three as distinctly styled actors in the viewport.
 - The three meshes appear styled distinctly (high poly shaded opaque, low poly
   wireframe, cage semi-transparent).
 
+## Status
+
+Implemented. `CageEditor(low_path, high_path, cage_path)` loads the low poly (cage
+matches its topology + normals), the high poly (opaque, smooth-shaded - PBR is M5),
+and an optional cage file (correspondence-checked: count must match the low poly).
+With no cage file the cage is an in-memory copy of the low poly. The CLI defaults to
+the Mat Ball low/high pair (`MatBall_LP.usdc` + `MatBall.usdc`).
+
+**Create cage** ([c] key): writes a topology-matched cage to `<low_stem>_cage.usd`
+by duplicating the low-poly USD (the chosen "USD copy" approach - identical topology,
+correspondence guaranteed). Saving an offset/edited cage is a later "save" action.
+
+**Undo/redo** ([z]/[y]): added per request - snapshots `manual_delta` after each
+completed drag, with redo-branch truncation on a new edit. Cross-cutting, not part of
+the original milestone phases.
+
 ## References
 
 - `docs/architecture.md` - `meshio` module and FBX caveat.
