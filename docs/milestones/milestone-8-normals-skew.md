@@ -25,7 +25,7 @@ the skew control for per-region tuning.
 ## Phases
 
 1. [Phase 8.1 - Soft (welded) cage normals](milestone-8/phase-1-soft-cage-normals.md) - **done**
-2. [Phase 8.2 - Skew (hard/soft firing-direction blend)](milestone-8/phase-2-skew-blend.md)
+2. [Phase 8.2 - Skew (hard/soft firing-direction blend)](milestone-8/phase-2-skew-blend.md) - **done** (uniform skew; paintable per-region map is a follow-up)
 
 ## Exit criteria
 

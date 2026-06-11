@@ -129,6 +129,31 @@ def soft_vertex_normals(points: np.ndarray, normals: np.ndarray) -> np.ndarray:
     return gnorm[group]
 
 
+def blend_normals(
+    hard_normals: np.ndarray, soft_normals: np.ndarray, skew
+) -> np.ndarray:
+    """Per-vertex ray firing direction: normalize(lerp(hard, soft, skew)).
+
+    `skew` in [0, 1] is a scalar or a per-vertex (V,) array: 0 fires along the low
+    poly's hard normals, 1 along the soft (welded) copy. This is the M8.2 skew control -
+    it nudges the cage push / bake ray direction without moving cage points. Where hard
+    and soft are near-opposite and cancel at the blend, it falls back to the soft normal.
+    See docs/milestones/milestone-8/phase-2-skew-blend.md.
+    """
+    hard = np.asarray(hard_normals, dtype=np.float64)
+    soft = np.asarray(soft_normals, dtype=np.float64)
+    s = np.asarray(skew, dtype=np.float64)
+    if s.ndim == 1:
+        s = s[:, None]
+    blended = hard * (1.0 - s) + soft * s
+    norm = np.linalg.norm(blended, axis=1, keepdims=True)
+    bad = norm[:, 0] < 1e-8
+    if bad.any():
+        blended[bad] = soft[bad]
+        norm[bad] = np.linalg.norm(soft[bad], axis=1, keepdims=True)
+    return blended / (norm + 1e-12)
+
+
 def tangent_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Two orthonormal vectors spanning the tangent plane perpendicular to normal."""
     n = np.asarray(normal, dtype=np.float64)

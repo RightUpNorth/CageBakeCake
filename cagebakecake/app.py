@@ -57,10 +57,14 @@ class CageEditor:
         self._low_ranges = low_scene["ranges"]
         self._cached_low_tris = low_scene["tris"]
         self._cached_low_uvs = low_scene["uvs"]
-        # Hard normals stay on the low poly (they author the bake); the cage push uses
-        # soft (welded) normals so the shell is watertight over hard edges. (M8.1)
+        # Hard normals stay on the low poly (they author the bake's tangent frame); the
+        # cage push / bake rays fire along the skew blend of hard and soft (welded) normals
+        # (M8.1 soft normals, M8.2 skew). skew=1 is pure soft - watertight over hard edges -
+        # and is the default, so the firing direction matches the pre-skew behaviour.
         self.hard_normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
-        self.normals = cage.soft_vertex_normals(self.low.points, self.hard_normals)
+        self.soft_normals = cage.soft_vertex_normals(self.low.points, self.hard_normals)
+        self.skew = 1.0  # 0 = fire along hard normals, 1 = soft
+        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew)
         if high_path:
             high_scene = meshio.load_scene(high_path, with_uvs=False)
             self.high = high_scene["merged"]
@@ -831,6 +835,20 @@ class CageEditor:
     def _on_opacity(self, value: float) -> None:
         self.cage_actor.prop.opacity = float(value)
 
+    def set_skew(self, value: float) -> None:
+        """M8.2 skew: blend the cage push / bake ray direction between the hard normals
+        (0) and the soft welded normals (1). Recomposes the cage along the new direction;
+        cage points and any selected gizmo follow."""
+        self.skew = float(np.clip(value, 0.0, 1.0))
+        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew)
+        self._recompose()
+        if self.selected is not None:
+            self._build_gizmo(self.selected)
+            self._rebaseline()
+        else:
+            self._gizmo_follow()
+        self.pl.render()
+
     # --- create cage --------------------------------------------------------
     def _create_cage(self) -> None:
         """Duplicate the low-poly asset to <stem>_cage.usd (topology-matched cage)."""
@@ -875,11 +893,12 @@ class CageEditor:
         self._bake_status(f"Baking {w}x{h} (this can take a while)...")
         self.pl.render()
         image = bake.bake(
-            self.low.points, low_tris, self.normals, low_uvs,
+            self.low.points, low_tris, self.hard_normals, low_uvs,
             self.cage.points, self.high.points, high_tris,
             np.asarray(self.high.point_normals, dtype=np.float64),
             resolution=(w, h), out_path=out,
             progress=lambda m: print(f"[bake] {m}"),
+            firing_normals=self.normals,  # skew-blended ray direction (M8.2)
         )
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
