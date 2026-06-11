@@ -109,6 +109,12 @@ class MainWindow(QMainWindow):
         self._opacity.valueChanged.connect(self._on_opacity)
         form.addRow("Cage opacity", self._opacity)
 
+        self._skew = QSlider(Qt.Horizontal)
+        self._skew.setRange(0, _SLIDER_STEPS)
+        self._skew.valueChanged.connect(self._on_skew)
+        self._skew_label = QLabel("-")
+        form.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
+
         self._soft = QCheckBox("Soft select")
         self._soft.toggled.connect(self._on_soft)
         form.addRow(self._soft)
@@ -236,7 +242,7 @@ class MainWindow(QMainWindow):
         """Push the editor's current ranges/values into the dock widgets without
         triggering their change handlers (which would feed back into the editor)."""
         ed = self.editor
-        widgets = (self._offset, self._opacity, self._soft, self._radius,
+        widgets = (self._offset, self._opacity, self._skew, self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
@@ -246,6 +252,8 @@ class MainWindow(QMainWindow):
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
         self._offset_label.setText(f"{ed.global_push:.4f}")
         self._opacity.setValue(35)
+        self._skew.setValue(round(ed.skew * _SLIDER_STEPS))
+        self._skew_label.setText(f"{ed.skew:.2f}")
         self._soft.setChecked(ed.soft_enabled)
         self._radius_max = ed._diag * 0.5
         self._radius.setValue(round(ed.soft_radius / self._radius_max * _SLIDER_STEPS))
@@ -284,6 +292,11 @@ class MainWindow(QMainWindow):
 
     def _on_opacity(self, pct: int) -> None:
         self.editor._on_opacity(pct / 100.0)
+
+    def _on_skew(self, step: int) -> None:
+        value = step / _SLIDER_STEPS
+        self.editor.set_skew(value)
+        self._skew_label.setText(f"{value:.2f}")
 
     def _on_soft(self, checked: bool) -> None:
         self.editor.set_soft_enabled(checked)

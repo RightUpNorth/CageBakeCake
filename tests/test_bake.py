@@ -66,6 +66,20 @@ def test_tilted_high_normal_pushes_red_channel():
     assert b > 150  # normal still mostly out of the surface
 
 
+def test_skew_firing_does_not_distort_encode():
+    # The firing direction (skew, M8.2) aims the rays, but the map is encoded in the
+    # shading-normal frame. Tilt the firing direction; with a flat +Z high poly and +Z
+    # shading normals the interior must still encode flat blue (it would push red if the
+    # encode wrongly used the tilted firing direction).
+    lp, lt, ln, luv = _low_quad()  # shading normals +Z
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])  # high normal +Z, spans past the unit square
+    firing = np.tile(np.array([0.6, 0.0, 0.8]), (4, 1))  # tilted toward +X
+    img = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=32,
+                    firing_normals=firing)
+    interior = img[6:26, 6:26]
+    assert np.allclose(interior, bake.FLAT_RGB, atol=3), interior.reshape(-1, 3).mean(0)
+
+
 def test_misses_stay_flat():
     # Cage thinner than the gap to the high poly -> every ray falls short -> all flat.
     lp, lt, ln, luv = _low_quad()

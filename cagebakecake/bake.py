@@ -147,11 +147,18 @@ def bake(
     resolution: "int | tuple[int, int]" = 1024,
     out_path: str | None = None,
     progress=None,
+    firing_normals: np.ndarray | None = None,
 ) -> np.ndarray:
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
 
     `resolution` is the map size: an int for a square map, or a (width, height) pair
     for a non-square one.
+
+    `low_normals` is the low poly's shading normal - the frame the high-poly normal is
+    encoded into (the normal the engine interpolates), and it must be the hard normals
+    that author the map. `firing_normals` is the direction rays are cast along; pass the
+    skew-blended normals here to bend the firing without moving cage points (M8.2). It
+    defaults to `low_normals`, so a plain bake fires along the shading normal.
 
     For each covered texel: interpolate the low-poly surface point, normal, and cage
     point; fire a ray from the cage point inward along -normal through the surface and
@@ -183,14 +190,19 @@ def bake(
             _write_png(out_path, image)
         return image
 
-    # Interpolate per-texel surface point, ray direction, and cage point.
+    # Interpolate per-texel surface point, normals, and cage point. The shading normal
+    # is the encode frame; the firing normal (skew-blended, M8.2) aims the rays.
+    firing = low_normals if firing_normals is None else firing_normals
     corners = low_tris[tri_index]  # (M,3) vertex indices
     cpos = low_points[corners]  # (M,3,3)
     cnrm = low_normals[corners]
+    cfire = firing[corners]
     ccage = cage_points[corners]
     w = bary[:, :, None]
     surf = np.sum(cpos * w, axis=1)
-    direction = np.sum(cnrm * w, axis=1)
+    shade = np.sum(cnrm * w, axis=1)
+    shade = shade / (np.linalg.norm(shade, axis=1, keepdims=True) + 1e-12)
+    direction = np.sum(cfire * w, axis=1)
     direction = direction / (np.linalg.norm(direction, axis=1, keepdims=True) + 1e-12)
     cage = np.sum(ccage * w, axis=1)
 
@@ -204,14 +216,15 @@ def bake(
         origins, -direction, max_len, high_points, high_tris, high_normals
     )
 
-    # Per-triangle tangent basis, expanded to the covered texels.
+    # Per-triangle tangent basis, expanded to the covered texels. The frame normal is the
+    # shading normal (not the firing direction), so skew does not distort the encoded map.
     tri_pos = low_points[low_tris]  # (F,3,3)
     tan, bit = _per_triangle_tangent(tri_pos, low_uvs)
     rgb = _encode_tangent_space(
         hit_normals[hit_mask],
         tan[tri_index][hit_mask],
         bit[tri_index][hit_mask],
-        direction[hit_mask],
+        shade[hit_mask],
     )
     hit_yx = yx[hit_mask]
     image[hit_yx[:, 0], hit_yx[:, 1]] = rgb
