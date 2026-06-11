@@ -494,6 +494,15 @@ class CageEditor:
         self._cage_path = out
         print(f"[create-cage] wrote {out}")
 
+    # --- view toggles -------------------------------------------------------
+    def _toggle_high(self) -> None:
+        """Show/hide the opaque high poly so it stops occluding the cage and low poly."""
+        if self.high is None or "high" not in self.pl.actors:
+            return
+        actor = self.pl.actors["high"]
+        actor.SetVisibility(not actor.GetVisibility())
+        self.pl.render()
+
     # --- bake (M7.4) --------------------------------------------------------
     def _bake(self) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using
@@ -571,7 +580,8 @@ class CageEditor:
             "Left-click a vertex to select. Drag the RED arrow to displace (normal),\n"
             "the GREEN ring to slide (along surface).\n"
             "[o] soft-select   [ [ / ] ] radius   [z] undo  [y] redo  [c] create-cage\n"
-            "[b] bake normal map (toggles preview)   shift-drag = rotate the HDR lighting\n"
+            "[b] bake normal map (toggles preview)   [h] hide/show high poly\n"
+            "shift-drag = rotate the HDR lighting\n"
             f"Soft: {soft_label}",
             font_size=10,
             name="help",
@@ -590,6 +600,7 @@ class CageEditor:
         self.pl.add_key_event("y", self._redo)
         self.pl.add_key_event("c", self._create_cage)
         self.pl.add_key_event("b", self._bake)
+        self.pl.add_key_event("h", self._toggle_high)
         self.pl.add_slider_widget(
             self._on_push, [0.0, self._push_max], value=self.global_push,
             title="cage offset", pointa=(0.025, 0.10), pointb=(0.31, 0.10),
