@@ -43,6 +43,7 @@ class CageEditor:
         hdr_path: str | None = None,
         global_push: float | None = None,
         off_screen: bool = False,
+        plotter: "pv.Plotter | None" = None,
     ):
         self._low_path = low_path
         self._high_path = high_path
@@ -113,7 +114,10 @@ class CageEditor:
         self.soft_radius = diag * 0.1
         self._push_max = diag * 0.3
 
-        self.pl = pv.Plotter(off_screen=off_screen)
+        # The render surface. Default is a standalone pyvista Plotter (also the headless
+        # screenshot path); the Qt front end injects a pyvistaqt.QtInteractor instead, which
+        # is API-compatible for everything used here. See cagebakecake/window.py.
+        self.pl = plotter if plotter is not None else pv.Plotter(off_screen=off_screen)
         self._handle_picker = vtk.vtkCellPicker()
         self._handle_picker.SetTolerance(0.01)
         self._mesh_picker = vtk.vtkCellPicker()
@@ -377,7 +381,16 @@ class CageEditor:
         self.pl.render()
 
     def _scale_radius(self, factor: float) -> None:
-        self.soft_radius *= factor
+        self.set_soft_radius(self.soft_radius * factor)
+
+    def set_soft_enabled(self, on: bool) -> None:
+        """Set soft-select on/off (the Qt checkbox drives this; [o] toggles it)."""
+        if bool(on) != self.soft_enabled:
+            self._toggle_soft()
+
+    def set_soft_radius(self, radius: float) -> None:
+        """Set the soft-select falloff radius to an absolute value (Qt radius slider)."""
+        self.soft_radius = float(radius)
         print(f"[soft] radius={self.soft_radius:.3f}")
         if self.selected is not None and self.soft_enabled:
             self._rebaseline()
@@ -534,13 +547,15 @@ class CageEditor:
         self.pl.render()
 
     # --- bake (M7.4) --------------------------------------------------------
-    def _bake(self) -> None:
+    def _bake(self, out_path: str | None = None) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using
         the current cage as the per-vertex ray bound, then preview it on the low poly.
-        Pressing the key again leaves the preview and returns to editing."""
-        if self._preview_on:
+        Pressing the key again leaves the preview and returns to editing. `out_path`
+        overrides the default `<low>_normal.png` (used by File > Export Normal Map)."""
+        if self._preview_on and out_path is None:
             self._hide_preview()
             return
+        self._preview_on = False
         if self.high is None:
             self._bake_status("Bake needs a high poly (pass --high).")
             self.pl.render()
@@ -557,7 +572,7 @@ class CageEditor:
             self.pl.render()
             return
 
-        out = os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png"
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png")
         self._bake_status(f"Baking {BAKE_RESOLUTION}x{BAKE_RESOLUTION} (this can take a while)...")
         self.pl.render()
         image = bake.bake(
@@ -617,7 +632,13 @@ class CageEditor:
             name="help",
         )
 
-    def run(self) -> None:
+    def attach_interaction(self) -> None:
+        """Wire the viewport mouse/keyboard interaction onto the plotter's interactor.
+
+        Shared by the standalone Plotter path (`run`) and the Qt front end, which drives
+        sliders/buttons from its own widgets but still wants the in-viewport picking,
+        gizmo drag, shift-drag lighting, and keyboard shortcuts.
+        """
         inter = self.pl.iren.interactor
         # Priority above the camera style so a handle grab can abort the rotate.
         self._press_tag = inter.AddObserver("LeftButtonPressEvent", self._on_press, 10.0)
@@ -633,6 +654,9 @@ class CageEditor:
         self.pl.add_key_event("h", self._toggle_high)
         self.pl.add_key_event("x", self._reset_selected)
         self.pl.add_key_event("X", self._reset_cage)
+
+    def run(self) -> None:
+        self.attach_interaction()
         self.pl.add_slider_widget(
             self._on_push, [0.0, self._push_max], value=self.global_push,
             title="cage offset", pointa=(0.025, 0.10), pointb=(0.31, 0.10),
