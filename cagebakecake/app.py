@@ -49,12 +49,27 @@ class CageEditor:
         self._high_path = high_path
         self._cage_path = cage_path
         self._hdr_path = hdr_path
-        self.low = meshio.load_mesh(low_path)
+        # Load each file as a scene: per-prim display parts + a merged mesh (with cached
+        # triangulation / UVs) for the cage and bake. One read per file.
+        low_scene = meshio.load_scene(low_path, with_uvs=True)
+        self.low = low_scene["merged"]
+        self.low_parts = low_scene["parts"]
+        self._low_ranges = low_scene["ranges"]
+        self._cached_low_tris = low_scene["tris"]
+        self._cached_low_uvs = low_scene["uvs"]
         # Hard normals stay on the low poly (they author the bake); the cage push uses
         # soft (welded) normals so the shell is watertight over hard edges. (M8.1)
         self.hard_normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
         self.normals = cage.soft_vertex_normals(self.low.points, self.hard_normals)
-        self.high = meshio.load_mesh(high_path) if high_path else None
+        if high_path:
+            high_scene = meshio.load_scene(high_path, with_uvs=False)
+            self.high = high_scene["merged"]
+            self.high_parts = high_scene["parts"]
+            self._cached_high_tris = high_scene["tris"]
+        else:
+            self.high = None
+            self.high_parts = []
+            self._cached_high_tris = None
 
         # The cage's rest geometry: a loaded cage (topology-checked) or the low poly.
         if cage_path:
@@ -129,6 +144,16 @@ class CageEditor:
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
         self._bake_size = (BAKE_RESOLUTION, BAKE_RESOLUTION)  # (width, height); set by the dock
+        # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
+        # links a low part and a high part that share a prim name (toggling one toggles both).
+        self._part_vis: dict[tuple[str, int], bool] = {}
+        for i in range(len(self.low_parts)):
+            self._part_vis[("low", i)] = True
+        for i in range(len(self.high_parts)):
+            self._part_vis[("high", i)] = True
+        self._name_match = False
+        self._low_actors: dict = {}
+        self._high_actors: dict = {}
 
         # The render surface. Default is a standalone pyvista Plotter (also the headless
         # screenshot path); the Qt front end injects a pyvistaqt.QtInteractor instead, which
@@ -173,51 +198,65 @@ class CageEditor:
         self.pl.set_background("slategray")
 
     # --- display modes (low / high material, normal map, cage, normals) -----
+    def _remove_actors(self, actors: dict) -> None:
+        for key in actors:
+            self.pl.remove_actor(key, render=False)
+
     def _apply_low_style(self) -> None:
-        """(Re)build the low-poly actor for the current style. Wireframe is the editing
-        view; shaded is a grey PBR material lit by the HDR (so shift-drag lighting reads),
-        optionally carrying the baked normal map so the light reacts to baked detail."""
-        self.pl.remove_actor("low", render=False)
-        if self._low_style == "wireframe":
-            self.low_actor = self.pl.add_mesh(
-                self.low, style="wireframe", color="white", line_width=1, name="low"
-            )
-            return
-        mesh, normal_tex = self._shaded_low_inputs()
-        self.low_actor = self.pl.add_mesh(
-            mesh, color="lightgray", pbr=True, metallic=0.1, roughness=0.6,
-            smooth_shading=True, name="low",
-        )
-        if normal_tex is not None:
-            self.low_actor.prop.SetNormalTexture(normal_tex)
-        self.low_actor.prop.SetEdgeVisibility(self._low_wire_on)  # wireframe overlay
+        """(Re)build the low-poly part actors for the current style. Each prim is its own
+        actor (so the mesh checklist can toggle it). Wireframe is the editing view; shaded
+        is a grey PBR material lit by the HDR (so shift-drag lighting reads), optionally
+        carrying the baked normal map so the light reacts to baked detail."""
+        self._remove_actors(self._low_actors)
+        self._low_actors = {}
+        for i, (_name, poly) in enumerate(self.low_parts):
+            key = f"low::{i}"
+            if self._low_style == "wireframe":
+                actor = self.pl.add_mesh(
+                    poly, style="wireframe", color="white", line_width=1, name=key
+                )
+            else:
+                mesh, normal_tex = self._shaded_part_inputs(i, poly)
+                actor = self.pl.add_mesh(
+                    mesh, color="lightgray", pbr=True, metallic=0.1, roughness=0.6,
+                    smooth_shading=True, name=key,
+                )
+                if normal_tex is not None:
+                    actor.prop.SetNormalTexture(normal_tex)
+                actor.prop.SetEdgeVisibility(self._low_wire_on)  # wireframe overlay
+            actor.SetVisibility(self._part_vis.get(("low", i), True))
+            self._low_actors[key] = actor
 
     def _apply_high_style(self) -> None:
-        """(Re)build the high-poly actor for the current style; independent of the low."""
-        if self.high is None:
-            return
-        self.pl.remove_actor("high", render=False)
-        if self._high_style == "wireframe":
-            self.high_actor = self.pl.add_mesh(
-                self.high, style="wireframe", color="tan", line_width=1, name="high"
-            )
-        else:
-            self.high_actor = self.pl.add_mesh(
-                self.high, color="tan", pbr=True, metallic=0.15, roughness=0.5,
-                smooth_shading=True, name="high",
-            )
-            self.high_actor.prop.SetEdgeVisibility(self._high_wire_on)  # wireframe overlay
-        self.high_actor.SetVisibility(self._high_visible)
+        """(Re)build the high-poly part actors for the current style; independent of the
+        low. Master visibility (_high_visible) ANDs with each part's checklist state."""
+        self._remove_actors(self._high_actors)
+        self._high_actors = {}
+        for i, (_name, poly) in enumerate(self.high_parts):
+            key = f"high::{i}"
+            if self._high_style == "wireframe":
+                actor = self.pl.add_mesh(
+                    poly, style="wireframe", color="tan", line_width=1, name=key
+                )
+            else:
+                actor = self.pl.add_mesh(
+                    poly, color="tan", pbr=True, metallic=0.15, roughness=0.5,
+                    smooth_shading=True, name=key,
+                )
+                actor.prop.SetEdgeVisibility(self._high_wire_on)  # wireframe overlay
+            actor.SetVisibility(self._high_visible and self._part_vis.get(("high", i), True))
+            self._high_actors[key] = actor
 
-    def _shaded_low_inputs(self):
-        """(mesh, vtkTexture|None) for the shaded low poly: the bare low poly, or - when a
-        bake exists and the normal map is on - a triangulated copy carrying the baked UVs
-        and tangents plus the normal map as a linear VTK texture for the PBR shader."""
+    def _shaded_part_inputs(self, i: int, poly: pv.PolyData):
+        """(mesh, vtkTexture|None) for a shaded low-poly part: the bare part, or - when a
+        bake exists and the normal map is on - a triangulated copy carrying that part's
+        slice of the baked UVs plus tangents and the normal-map texture."""
         if not (self._normal_map_on and self._baked_image is not None
                 and self._baked_uv is not None):
-            return self.low, None
-        mesh = self.low.copy()
-        mesh.active_texture_coordinates = self._baked_uv.astype(np.float32)
+            return poly, None
+        _name, start, count = self._low_ranges[i]
+        mesh = poly.copy()
+        mesh.active_texture_coordinates = self._baked_uv[start:start + count].astype(np.float32)
         mesh = mesh.triangulate()  # vtkPolyDataTangents needs triangles
         self._add_tangents(mesh)
         return mesh, self._make_normal_texture(self._baked_image)
@@ -271,34 +310,81 @@ class CageEditor:
         self.set_high_style(self._high_style == "wireframe")
 
     def set_high_visible(self, on: bool) -> None:
-        """Show/hide the high poly (so it stops occluding the cage and low poly)."""
+        """Show/hide the whole high poly (master toggle; ANDed with each part's checklist
+        state). It is opaque and otherwise occludes the cage and low poly."""
         if self.high is None:
             return
         self._high_visible = bool(on)
-        actor = self.pl.actors.get("high")
-        if actor is not None:
-            actor.SetVisibility(self._high_visible)
-            self.pl.render()
+        for i, key in enumerate(self._high_actors):
+            self._high_actors[key].SetVisibility(
+                self._high_visible and self._part_vis.get(("high", i), True)
+            )
+        self.pl.render()
 
     def set_low_wire(self, on: bool) -> None:
-        """Toggle a wireframe (edge) overlay on the shaded low poly."""
+        """Toggle a wireframe (edge) overlay on the shaded low-poly parts."""
         self._low_wire_on = bool(on)
-        if getattr(self, "low_actor", None) is not None:
-            self.low_actor.prop.SetEdgeVisibility(self._low_wire_on)
-            self.pl.render()
+        for actor in self._low_actors.values():
+            actor.prop.SetEdgeVisibility(self._low_wire_on)
+        self.pl.render()
 
     def toggle_low_wire(self) -> None:
         self.set_low_wire(not self._low_wire_on)
 
     def set_high_wire(self, on: bool) -> None:
-        """Toggle a wireframe (edge) overlay on the shaded high poly."""
+        """Toggle a wireframe (edge) overlay on the shaded high-poly parts."""
         self._high_wire_on = bool(on)
-        if getattr(self, "high_actor", None) is not None:
-            self.high_actor.prop.SetEdgeVisibility(self._high_wire_on)
-            self.pl.render()
+        for actor in self._high_actors.values():
+            actor.prop.SetEdgeVisibility(self._high_wire_on)
+        self.pl.render()
 
     def toggle_high_wire(self) -> None:
         self.set_high_wire(not self._high_wire_on)
+
+    # --- per-mesh checklist + name match ------------------------------------
+    def meshes(self) -> list[tuple[str, int, str, bool]]:
+        """The mesh checklist: (group, index, label, visible) for every loaded part."""
+        out = []
+        for group, parts in (("low", self.low_parts), ("high", self.high_parts)):
+            for i, (name, _poly) in enumerate(parts):
+                out.append((group, i, f"{group}: {name}", self._part_vis.get((group, i), True)))
+        return out
+
+    def _part_actor(self, group: str, idx: int):
+        return (self._low_actors if group == "low" else self._high_actors).get(f"{group}::{idx}")
+
+    def set_part_visible(self, group: str, idx: int, on: bool) -> None:
+        """Show/hide one part (mesh checklist). With name match on, a part with the same
+        prim name in the other poly is toggled to match."""
+        on = bool(on)
+        self._part_vis[(group, idx)] = on
+        self._apply_part_visibility(group, idx)
+        if self._name_match:
+            for g2, i2 in self._matching_parts(group, idx):
+                self._part_vis[(g2, i2)] = on
+                self._apply_part_visibility(g2, i2)
+        self.pl.render()
+
+    def _apply_part_visibility(self, group: str, idx: int) -> None:
+        actor = self._part_actor(group, idx)
+        if actor is not None:
+            vis = self._part_vis.get((group, idx), True)
+            if group == "high":
+                vis = vis and self._high_visible
+            actor.SetVisibility(vis)
+
+    def _matching_parts(self, group: str, idx: int):
+        """Parts in the *other* poly whose prim name equals this part's (for name match)."""
+        parts = self.low_parts if group == "low" else self.high_parts
+        if idx >= len(parts):
+            return []
+        name = parts[idx][0]
+        other_group = "high" if group == "low" else "low"
+        other = self.high_parts if group == "low" else self.low_parts
+        return [(other_group, j) for j, (n, _p) in enumerate(other) if n == name]
+
+    def set_name_match(self, on: bool) -> None:
+        self._name_match = bool(on)
 
     def set_normal_map(self, on: bool) -> None:
         self._normal_map_on = bool(on)
@@ -775,15 +861,11 @@ class CageEditor:
             self._bake_status("Bake needs a high poly (pass --high).")
             self.pl.render()
             return
-        try:
-            low_tris, low_uvs = meshio.load_faces_uvs(self._low_path)
-            if low_uvs is None:
-                self._bake_status("Bake failed: the low poly has no UVs.")
-                self.pl.render()
-                return
-            high_tris, _ = meshio.load_faces_uvs(self._high_path, with_uvs=False)
-        except Exception as exc:  # noqa: BLE001 - surface the error, don't crash the app
-            self._bake_status(f"Bake failed to read meshes: {exc}")
+        # Triangulation / UVs were cached at load (merged across all prims).
+        low_tris, low_uvs = self._cached_low_tris, self._cached_low_uvs
+        high_tris = self._cached_high_tris
+        if low_uvs is None:
+            self._bake_status("Bake failed: the low poly has no UVs.")
             self.pl.render()
             return
 

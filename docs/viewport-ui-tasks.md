@@ -53,21 +53,17 @@ needs a look on the desktop - the Qt + GL viewport cannot be verified headlessly
   fires on a click, so press + move-threshold + release works. *Needs a desktop check
   that release fires for a plain click.*
 
-## Per-mesh visibility (needs a decision)
+## Per-mesh visibility
 
-- [ ] **Per-mesh checklist** - a checklist of the meshes in each file; toggling an
-  entry shows / hides that mesh.
-- [ ] **Name-match toggle** - match low and high sub-meshes by name.
-
-  Findings from the current assets:
-  - Most files hold a single mesh. `bin_lp` holds two (`uv_fix` 3049 pts +
-    `uv_fix_001` 237 pts); the app currently loads only the largest prim, silently
-    dropping `uv_fix_001`. A real per-mesh checklist means loading *all* prims as
-    separate, individually-toggleable actors (a `meshio` + `app` change).
-  - Low and high prim names do not match (`uv_fix` vs `trash_can` / `mesh`), so
-    name-matching between low and high is not meaningful for these assets.
-  - Open question: load all sub-meshes now and add the per-file checklist, or defer
-    until an asset actually needs it?
+- [x] **Load all prims** - `meshio.load_scene` now loads every mesh prim, not just the
+  largest. `bin_lp` keeps both meshes (`uv_fix` + `uv_fix_001`, merged 3286 pts);
+  before, `uv_fix_001` was silently dropped. The merged mesh (with cached
+  triangulation / UVs) drives the cage and bake; the per-prim parts drive display.
+- [x] **Per-mesh checklist** - a dock checklist with one checkable row per prim
+  (low + high); toggling a row shows / hides that part's actor.
+- [x] **Name-match toggle** - when on, toggling a part also toggles a part in the
+  *other* poly that shares its prim name. A no-op on the current assets (low/high names
+  differ: `uv_fix` vs `trash_can`), useful for assets that share naming.
 
 ## Notes
 

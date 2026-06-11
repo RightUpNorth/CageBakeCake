@@ -21,6 +21,8 @@ from qtpy.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QSlider,
@@ -155,6 +157,16 @@ class MainWindow(QMainWindow):
         self._cage_wire.toggled.connect(lambda v: self.editor.set_cage_wire(v))
         form.addRow(self._cage_wire)
 
+        # Per-mesh visibility checklist (one row per prim in the loaded files).
+        self._name_match = QCheckBox("Name match (link low/high by prim name)")
+        self._name_match.toggled.connect(lambda v: self.editor.set_name_match(v))
+        form.addRow(self._name_match)
+
+        self._mesh_list = QListWidget()
+        self._mesh_list.setMaximumHeight(120)
+        self._mesh_list.itemChanged.connect(self._on_mesh_toggle)
+        form.addRow("Meshes", self._mesh_list)
+
         # Bake size: independent width and height (a non-square map is allowed).
         self._bake_w = self._size_combo()
         self._bake_h = self._size_combo()
@@ -228,7 +240,7 @@ class MainWindow(QMainWindow):
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
-                   self._bake_w, self._bake_h)
+                   self._bake_w, self._bake_h, self._name_match, self._mesh_list)
         for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
@@ -253,6 +265,14 @@ class MainWindow(QMainWindow):
         self._cage_wire.setChecked(False)
         self._bake_w.setCurrentText(str(ed._bake_size[0]))
         self._bake_h.setCurrentText(str(ed._bake_size[1]))
+        self._name_match.setChecked(ed._name_match)
+        self._mesh_list.clear()
+        for group, idx, label, visible in ed.meshes():
+            item = QListWidgetItem(label)
+            item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            item.setCheckState(Qt.Checked if visible else Qt.Unchecked)
+            item.setData(Qt.UserRole, (group, idx))
+            self._mesh_list.addItem(item)
         for w in widgets:
             w.blockSignals(False)
 
@@ -276,6 +296,10 @@ class MainWindow(QMainWindow):
     def _on_bake_size(self, _text: str) -> None:
         self.editor.set_bake_size(int(self._bake_w.currentText()),
                                   int(self._bake_h.currentText()))
+
+    def _on_mesh_toggle(self, item: QListWidgetItem) -> None:
+        group, idx = item.data(Qt.UserRole)
+        self.editor.set_part_visible(group, idx, item.checkState() == Qt.Checked)
 
     # --- menu / button actions ----------------------------------------------
     def _reset_cage(self) -> None:
