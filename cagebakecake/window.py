@@ -15,6 +15,7 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDockWidget,
     QFileDialog,
     QFormLayout,
@@ -23,7 +24,6 @@ from qtpy.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSlider,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -31,6 +31,7 @@ from .app import CageEditor
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
+_BAKE_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384]  # normal-map width/height choices
 
 
 class MainWindow(QMainWindow):
@@ -73,8 +74,17 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("Quit", self.close)
 
+        # Menu toggles flip the matching dock checkbox so the two stay in sync.
         view_menu = bar.addMenu("&View")
         view_menu.addAction("Toggle High Poly", self._toggle_high)
+        view_menu.addAction("Low Poly Wireframe/Shaded", lambda: self._low_shaded.toggle())
+        view_menu.addAction("High Poly Wireframe/Shaded", lambda: self._high_shaded.toggle())
+        view_menu.addAction("Toggle Normal Map", lambda: self._normal_map.toggle())
+        view_menu.addAction("Toggle LP Normals", lambda: self._show_normals.toggle())
+        view_menu.addSeparator()
+        view_menu.addAction("Toggle Cage Points", lambda: self._cage_points.toggle())
+        view_menu.addAction("Toggle Cage Wireframe", lambda: self._cage_wire.toggle())
+        view_menu.addSeparator()
         view_menu.addAction("Reset Cage", self._reset_cage)
         view_menu.addAction("Reset Selected Point", self._reset_point)
 
@@ -105,13 +115,43 @@ class MainWindow(QMainWindow):
         self._radius_label = QLabel("-")
         form.addRow("Soft radius", self._labeled(self._radius, self._radius_label))
 
-        bake_btn = QPushButton("Bake / Preview")
+        # Display toggles. Low and high carry independent material switches; the cage and
+        # its normals stay visible in every mode.
+        self._low_shaded = QCheckBox("Low poly shaded")
+        self._low_shaded.toggled.connect(lambda v: self.editor.set_low_style(v))
+        form.addRow(self._low_shaded)
+
+        self._high_shaded = QCheckBox("High poly shaded")
+        self._high_shaded.toggled.connect(lambda v: self.editor.set_high_style(v))
+        form.addRow(self._high_shaded)
+
+        self._normal_map = QCheckBox("Normal map (shaded low)")
+        self._normal_map.toggled.connect(lambda v: self.editor.set_normal_map(v))
+        form.addRow(self._normal_map)
+
+        self._show_normals = QCheckBox("Show LP normals")
+        self._show_normals.toggled.connect(lambda v: self.editor.set_low_normals(v))
+        form.addRow(self._show_normals)
+
+        self._cage_points = QCheckBox("Cage points")
+        self._cage_points.toggled.connect(lambda v: self.editor.set_cage_points(v))
+        form.addRow(self._cage_points)
+
+        self._cage_wire = QCheckBox("Cage wireframe")
+        self._cage_wire.toggled.connect(lambda v: self.editor.set_cage_wire(v))
+        form.addRow(self._cage_wire)
+
+        # Bake size: independent width and height (a non-square map is allowed).
+        self._bake_w = self._size_combo()
+        self._bake_h = self._size_combo()
+        self._bake_w.currentTextChanged.connect(self._on_bake_size)
+        self._bake_h.currentTextChanged.connect(self._on_bake_size)
+        form.addRow("Bake width", self._bake_w)
+        form.addRow("Bake height", self._bake_h)
+
+        bake_btn = QPushButton("Bake")
         bake_btn.clicked.connect(self._bake)
         form.addRow(bake_btn)
-
-        high_btn = QPushButton("Toggle High Poly")
-        high_btn.clicked.connect(self._toggle_high)
-        form.addRow(high_btn)
 
         reset_cage_btn = QPushButton("Reset Cage")
         reset_cage_btn.clicked.connect(self._reset_cage)
@@ -127,6 +167,13 @@ class MainWindow(QMainWindow):
 
         dock.setWidget(panel)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+
+    @staticmethod
+    def _size_combo() -> QComboBox:
+        box = QComboBox()
+        for s in _BAKE_SIZES:
+            box.addItem(str(s))
+        return box
 
     @staticmethod
     def _labeled(slider: QSlider, label: QLabel) -> QWidget:
@@ -163,7 +210,11 @@ class MainWindow(QMainWindow):
         """Push the editor's current ranges/values into the dock widgets without
         triggering their change handlers (which would feed back into the editor)."""
         ed = self.editor
-        for w in (self._offset, self._opacity, self._soft, self._radius):
+        widgets = (self._offset, self._opacity, self._soft, self._radius,
+                   self._low_shaded, self._high_shaded, self._normal_map,
+                   self._show_normals, self._cage_points, self._cage_wire,
+                   self._bake_w, self._bake_h)
+        for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
         self._offset_label.setText(f"{ed.global_push:.4f}")
@@ -172,7 +223,16 @@ class MainWindow(QMainWindow):
         self._radius_max = ed._diag * 0.5
         self._radius.setValue(round(ed.soft_radius / self._radius_max * _SLIDER_STEPS))
         self._radius_label.setText(f"{ed.soft_radius:.3f}")
-        for w in (self._offset, self._opacity, self._soft, self._radius):
+        self._low_shaded.setChecked(ed._low_style == "shaded")
+        self._high_shaded.setChecked(ed._high_style == "shaded")
+        self._high_shaded.setEnabled(ed.high is not None)
+        self._normal_map.setChecked(ed._normal_map_on)
+        self._show_normals.setChecked(ed._normals_glyph_on)
+        self._cage_points.setChecked(True)   # cage_pts starts visible
+        self._cage_wire.setChecked(False)
+        self._bake_w.setCurrentText(str(ed._bake_size[0]))
+        self._bake_h.setCurrentText(str(ed._bake_size[1]))
+        for w in widgets:
             w.blockSignals(False)
 
     # --- dock callbacks -----------------------------------------------------
@@ -192,6 +252,10 @@ class MainWindow(QMainWindow):
         self.editor.set_soft_radius(value)
         self._radius_label.setText(f"{value:.3f}")
 
+    def _on_bake_size(self, _text: str) -> None:
+        self.editor.set_bake_size(int(self._bake_w.currentText()),
+                                  int(self._bake_h.currentText()))
+
     # --- menu / button actions ----------------------------------------------
     def _toggle_high(self) -> None:
         self.editor._toggle_high()
@@ -206,7 +270,12 @@ class MainWindow(QMainWindow):
         self._set_status("Baking (this can take a while)...")
         QApplication.processEvents()
         self.editor._bake()
-        self._set_status("Done. Bake button again returns to editing.")
+        # The bake switches the low poly to shaded + normal map; reflect that in the dock.
+        for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
+            w.blockSignals(True)
+            w.setChecked(checked)
+            w.blockSignals(False)
+        self._set_status("Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
 
     def _open_low(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open Low Poly", "", _USD_FILTER)

@@ -31,23 +31,25 @@ FLAT_RGB = np.array([128, 128, 255], dtype=np.uint8)  # tangent-space (0,0,1)
 
 # --- rasterization (Phase 7.1) ---------------------------------------------
 def _rasterize_uv_triangles(
-    uvs: np.ndarray, resolution: int
+    uvs: np.ndarray, width: int, height: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Walk the UV triangles and record, per covered texel, which triangle covers it
     and the barycentric weights of the texel center within that triangle.
 
     UV (0,0) is bottom-left; image row 0 is the top, so v is flipped into row space.
-    Later triangles overwrite earlier ones on overlap (last-writer-wins); UV layouts
-    are not expected to overlap. Returns (texel_yx, tri_index, bary) for covered
-    texels, where bary is (M,3) weights over the triangle's three corners.
+    The grid is `height` rows by `width` columns (a non-square map is allowed). Later
+    triangles overwrite earlier ones on overlap (last-writer-wins); UV layouts are not
+    expected to overlap. Returns (texel_yx, tri_index, bary) for covered texels, where
+    bary is (M,3) weights over the triangle's three corners.
     """
-    n = int(resolution)
-    tri_of = np.full((n, n), -1, dtype=np.int64)
-    bary_of = np.zeros((n, n, 3), dtype=np.float64)
+    w = int(width)
+    h = int(height)
+    tri_of = np.full((h, w), -1, dtype=np.int64)
+    bary_of = np.zeros((h, w, 3), dtype=np.float64)
 
     # UV -> continuous pixel coords (x right, y down).
-    px = uvs[..., 0] * n
-    py = (1.0 - uvs[..., 1]) * n
+    px = uvs[..., 0] * w
+    py = (1.0 - uvs[..., 1]) * h
 
     for f in range(uvs.shape[0]):
         x0, x1, x2 = px[f]
@@ -56,9 +58,9 @@ def _rasterize_uv_triangles(
         if abs(det) < 1e-12:  # degenerate UV triangle
             continue
         xmin = max(int(np.floor(min(x0, x1, x2))), 0)
-        xmax = min(int(np.ceil(max(x0, x1, x2))), n - 1)
+        xmax = min(int(np.ceil(max(x0, x1, x2))), w - 1)
         ymin = max(int(np.floor(min(y0, y1, y2))), 0)
-        ymax = min(int(np.ceil(max(y0, y1, y2))), n - 1)
+        ymax = min(int(np.ceil(max(y0, y1, y2))), h - 1)
         if xmin > xmax or ymin > ymax:
             continue
 
@@ -142,11 +144,14 @@ def bake(
     high_points: np.ndarray,
     high_tris: np.ndarray,
     high_normals: np.ndarray,
-    resolution: int = 1024,
+    resolution: "int | tuple[int, int]" = 1024,
     out_path: str | None = None,
     progress=None,
 ) -> np.ndarray:
-    """Bake a tangent-space normal map; return the (N,N,3) uint8 buffer.
+    """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
+
+    `resolution` is the map size: an int for a square map, or a (width, height) pair
+    for a non-square one.
 
     For each covered texel: interpolate the low-poly surface point, normal, and cage
     point; fire a ray from the cage point inward along -normal through the surface and
@@ -166,10 +171,13 @@ def bake(
         )
 
     notify = progress or (lambda _msg: None)
-    n = int(resolution)
-    notify(f"rasterizing {low_tris.shape[0]} triangles into {n}x{n}")
-    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, n)
-    image = np.tile(FLAT_RGB, (n, n, 1))
+    if isinstance(resolution, (tuple, list)):
+        width, height = int(resolution[0]), int(resolution[1])
+    else:
+        width = height = int(resolution)
+    notify(f"rasterizing {low_tris.shape[0]} triangles into {width}x{height}")
+    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, width, height)
+    image = np.tile(FLAT_RGB, (height, width, 1))
     if tri_index.size == 0:
         if out_path:
             _write_png(out_path, image)
