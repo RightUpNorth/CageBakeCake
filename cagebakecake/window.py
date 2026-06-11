@@ -76,9 +76,11 @@ class MainWindow(QMainWindow):
 
         # Menu toggles flip the matching dock checkbox so the two stay in sync.
         view_menu = bar.addMenu("&View")
-        view_menu.addAction("Toggle High Poly", self._toggle_high)
-        view_menu.addAction("Low Poly Wireframe/Shaded", lambda: self._low_shaded.toggle())
-        view_menu.addAction("High Poly Wireframe/Shaded", lambda: self._high_shaded.toggle())
+        view_menu.addAction("Toggle High Poly Visible", lambda: self._high_visible.toggle())
+        view_menu.addAction("Low Poly Shaded", lambda: self._low_shaded.toggle())
+        view_menu.addAction("Low Poly Wireframe", lambda: self._low_wire.toggle())
+        view_menu.addAction("High Poly Shaded", lambda: self._high_shaded.toggle())
+        view_menu.addAction("High Poly Wireframe", lambda: self._high_wire.toggle())
         view_menu.addAction("Toggle Normal Map", lambda: self._normal_map.toggle())
         view_menu.addAction("Toggle LP Normals", lambda: self._show_normals.toggle())
         view_menu.addSeparator()
@@ -121,9 +123,21 @@ class MainWindow(QMainWindow):
         self._low_shaded.toggled.connect(lambda v: self.editor.set_low_style(v))
         form.addRow(self._low_shaded)
 
+        self._low_wire = QCheckBox("Low poly wireframe")
+        self._low_wire.toggled.connect(lambda v: self.editor.set_low_wire(v))
+        form.addRow(self._low_wire)
+
+        self._high_visible = QCheckBox("High poly visible")
+        self._high_visible.toggled.connect(lambda v: self.editor.set_high_visible(v))
+        form.addRow(self._high_visible)
+
         self._high_shaded = QCheckBox("High poly shaded")
         self._high_shaded.toggled.connect(lambda v: self.editor.set_high_style(v))
         form.addRow(self._high_shaded)
+
+        self._high_wire = QCheckBox("High poly wireframe")
+        self._high_wire.toggled.connect(lambda v: self.editor.set_high_wire(v))
+        form.addRow(self._high_wire)
 
         self._normal_map = QCheckBox("Normal map (shaded low)")
         self._normal_map.toggled.connect(lambda v: self.editor.set_normal_map(v))
@@ -211,7 +225,8 @@ class MainWindow(QMainWindow):
         triggering their change handlers (which would feed back into the editor)."""
         ed = self.editor
         widgets = (self._offset, self._opacity, self._soft, self._radius,
-                   self._low_shaded, self._high_shaded, self._normal_map,
+                   self._low_shaded, self._low_wire, self._high_visible,
+                   self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
                    self._bake_w, self._bake_h)
         for w in widgets:
@@ -224,8 +239,14 @@ class MainWindow(QMainWindow):
         self._radius.setValue(round(ed.soft_radius / self._radius_max * _SLIDER_STEPS))
         self._radius_label.setText(f"{ed.soft_radius:.3f}")
         self._low_shaded.setChecked(ed._low_style == "shaded")
+        self._low_wire.setChecked(ed._low_wire_on)
+        has_high = ed.high is not None
+        self._high_visible.setChecked(ed._high_visible)
+        self._high_visible.setEnabled(has_high)
         self._high_shaded.setChecked(ed._high_style == "shaded")
-        self._high_shaded.setEnabled(ed.high is not None)
+        self._high_shaded.setEnabled(has_high)
+        self._high_wire.setChecked(ed._high_wire_on)
+        self._high_wire.setEnabled(has_high)
         self._normal_map.setChecked(ed._normal_map_on)
         self._show_normals.setChecked(ed._normals_glyph_on)
         self._cage_points.setChecked(True)   # cage_pts starts visible
@@ -257,9 +278,6 @@ class MainWindow(QMainWindow):
                                   int(self._bake_h.currentText()))
 
     # --- menu / button actions ----------------------------------------------
-    def _toggle_high(self) -> None:
-        self.editor._toggle_high()
-
     def _reset_cage(self) -> None:
         self.editor._reset_cage()
 

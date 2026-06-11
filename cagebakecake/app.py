@@ -121,6 +121,8 @@ class CageEditor:
         self._low_style = "wireframe"
         self._high_style = "shaded"
         self._high_visible = True
+        self._low_wire_on = False   # wireframe (edge) overlay on the shaded low poly
+        self._high_wire_on = False  # wireframe (edge) overlay on the shaded high poly
         self._normal_map_on = False
         self._baked_image: np.ndarray | None = None
         self._baked_uv: np.ndarray | None = None
@@ -153,10 +155,13 @@ class CageEditor:
         self.cage_actor = self.pl.add_mesh(
             self.cage, color="cyan", opacity=0.35, name="cage", show_edges=False
         )
-        self.pl.add_mesh(
-            self.cage, style="points", color="orange", point_size=9,
+        cage_pts = self.pl.add_mesh(
+            self.cage, style="points", color="orange", point_size=12,
             render_points_as_spheres=True, name="cage_pts",
         )
+        # Draw the points in front of the coincident cage surface the same way the gizmo
+        # handles do, so they are not buried in the depth fight with it.
+        cage_pts.mapper.SetResolveCoincidentTopologyToPolygonOffset()
         cage_wire = self.pl.add_mesh(
             self.cage, style="wireframe", color="cyan", line_width=1, name="cage_wire"
         )
@@ -185,6 +190,7 @@ class CageEditor:
         )
         if normal_tex is not None:
             self.low_actor.prop.SetNormalTexture(normal_tex)
+        self.low_actor.prop.SetEdgeVisibility(self._low_wire_on)  # wireframe overlay
 
     def _apply_high_style(self) -> None:
         """(Re)build the high-poly actor for the current style; independent of the low."""
@@ -200,6 +206,7 @@ class CageEditor:
                 self.high, color="tan", pbr=True, metallic=0.15, roughness=0.5,
                 smooth_shading=True, name="high",
             )
+            self.high_actor.prop.SetEdgeVisibility(self._high_wire_on)  # wireframe overlay
         self.high_actor.SetVisibility(self._high_visible)
 
     def _shaded_low_inputs(self):
@@ -262,6 +269,36 @@ class CageEditor:
 
     def toggle_high_style(self) -> None:
         self.set_high_style(self._high_style == "wireframe")
+
+    def set_high_visible(self, on: bool) -> None:
+        """Show/hide the high poly (so it stops occluding the cage and low poly)."""
+        if self.high is None:
+            return
+        self._high_visible = bool(on)
+        actor = self.pl.actors.get("high")
+        if actor is not None:
+            actor.SetVisibility(self._high_visible)
+            self.pl.render()
+
+    def set_low_wire(self, on: bool) -> None:
+        """Toggle a wireframe (edge) overlay on the shaded low poly."""
+        self._low_wire_on = bool(on)
+        if getattr(self, "low_actor", None) is not None:
+            self.low_actor.prop.SetEdgeVisibility(self._low_wire_on)
+            self.pl.render()
+
+    def toggle_low_wire(self) -> None:
+        self.set_low_wire(not self._low_wire_on)
+
+    def set_high_wire(self, on: bool) -> None:
+        """Toggle a wireframe (edge) overlay on the shaded high poly."""
+        self._high_wire_on = bool(on)
+        if getattr(self, "high_actor", None) is not None:
+            self.high_actor.prop.SetEdgeVisibility(self._high_wire_on)
+            self.pl.render()
+
+    def toggle_high_wire(self) -> None:
+        self.set_high_wire(not self._high_wire_on)
 
     def set_normal_map(self, on: bool) -> None:
         self._normal_map_on = bool(on)
@@ -721,11 +758,7 @@ class CageEditor:
     def _toggle_high(self) -> None:
         """Show/hide the high poly so it stops occluding the cage and low poly. Tracked so
         the visibility survives a material-switch rebuild of the actor."""
-        if self.high is None or "high" not in self.pl.actors:
-            return
-        self._high_visible = not self._high_visible
-        self.pl.actors["high"].SetVisibility(self._high_visible)
-        self.pl.render()
+        self.set_high_visible(not self._high_visible)
 
     # --- bake (M7.4) --------------------------------------------------------
     def set_bake_size(self, width: int, height: int) -> None:

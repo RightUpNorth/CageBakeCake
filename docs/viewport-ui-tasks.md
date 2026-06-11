@@ -26,6 +26,14 @@ needs a look on the desktop - the Qt + GL viewport cannot be verified headlessly
   stay visible.
 - [x] **Bake size** - independent width and height dropdowns, 256 ... 16384 (powers of
   two); a non-square map is allowed. `bake.bake` now takes `(width, height)`.
+- [x] **High poly visibility toggle** - a dock checkbox / menu item to turn the high
+  poly off (it is opaque and can occlude the cage).
+- [x] **Low / high wireframe overlay** - a wireframe (edge) overlay toggle on the
+  shaded low and high poly, independent of the material switch.
+- [x] **Cage points not visible** - the cage-point actor now uses the same
+  coincident-topology polygon offset as the gizmo handles, so the points draw in front
+  of the translucent cage surface instead of losing the depth fight. *Confirm on the
+  desktop; if still hidden it is the opaque high poly - turn it off.*
 
 ## Cage visibility
 
