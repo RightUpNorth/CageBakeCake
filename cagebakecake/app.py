@@ -41,7 +41,7 @@ class CageEditor:
         high_path: str | None = None,
         cage_path: str | None = None,
         hdr_path: str | None = None,
-        global_push: float = 0.03,
+        global_push: float | None = None,
         off_screen: bool = False,
     ):
         self._low_path = low_path
@@ -63,7 +63,11 @@ class CageEditor:
             self.base = np.asarray(cage_mesh.points, dtype=np.float64).copy()
         else:
             self.base = np.asarray(self.low.points, dtype=np.float64).copy()
-        self.global_push = float(global_push)
+        # Default the cage offset to a fraction of the mesh size so it is sensible at any
+        # scale (an absolute default bakes empty on small meshes / overshoots on large);
+        # an explicit global_push is still taken as absolute world units.
+        diag0 = float(np.linalg.norm(np.ptp(self.base, axis=0)))
+        self.global_push = diag0 * 0.03 if global_push is None else float(global_push)
         self.manual_delta = np.zeros_like(self.base)
         self.selected: int | None = None
         self.mode = "normal"  # "normal" = displace; "tangent" = slide (added next round)

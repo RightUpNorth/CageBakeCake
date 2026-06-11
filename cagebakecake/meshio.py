@@ -52,6 +52,24 @@ def _faces_to_vtk(face_vertex_counts, face_vertex_indices) -> np.ndarray:
     return faces
 
 
+def _to_canonical_frame(points: np.ndarray, stage) -> np.ndarray:
+    """Normalize world points into a canonical metres / Z-up frame.
+
+    Different converters encode the same mesh differently: Blender's USD export bakes a
+    0.01 scale and a Y->Z up-axis rotation into the prim transform (stage upAxis=Z,
+    metersPerUnit=1), while tools/fbx_ascii_to_usd.py writes the raw Y-up centimetre
+    points (upAxis=Y, the USD default metersPerUnit=0.01). Honoring metersPerUnit and the
+    stage up-axis here puts both in the same world space, so a low poly from one converter
+    and a high poly from the other still line up for baking.
+    """
+    points = points * UsdGeom.GetStageMetersPerUnit(stage)
+    if UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.y:
+        # Match Blender's Y-up -> Z-up: (x, y, z) -> (x, -z, y).
+        points = points[:, [0, 2, 1]]
+        points[:, 1] *= -1.0
+    return points
+
+
 def load_mesh(path: str) -> pv.PolyData:
     """Load a USD file into a pyvista.PolyData with world-space points and normals."""
     stage = Usd.Stage.Open(str(path))
@@ -67,6 +85,7 @@ def load_mesh(path: str) -> pv.PolyData:
     mat = np.asarray(xform, dtype=np.float64).reshape(4, 4)
     homog = np.hstack([points, np.ones((len(points), 1))])
     points = (homog @ mat)[:, :3]
+    points = _to_canonical_frame(points, stage)
 
     faces = _faces_to_vtk(
         mesh.GetFaceVertexCountsAttr().Get(),
