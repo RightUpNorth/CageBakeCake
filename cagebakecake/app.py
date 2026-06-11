@@ -408,6 +408,32 @@ class CageEditor:
             print(f"[redo] state {self._hist_index}/{len(self._history) - 1}")
             self._restore_state(self._history[self._hist_index])
 
+    def _reset_cage(self) -> None:
+        """Clear every per-vertex edit, returning the cage to its uniform push (the
+        offset slider is untouched). Undoable as a single step."""
+        if not self.manual_delta.any():
+            return
+        self.manual_delta[:] = 0.0
+        self._recompose()
+        self._push_history()
+        if self.selected is not None:
+            self._build_gizmo(self.selected)
+            self._rebaseline()
+        self.pl.render()
+        print("[reset] cleared all cage edits")
+
+    def _reset_selected(self) -> None:
+        """Clear the selected vertex's edit, returning just that point to the push."""
+        if self.selected is None or not self.manual_delta[self.selected].any():
+            return
+        self.manual_delta[self.selected] = 0.0
+        self._recompose()
+        self._push_history()
+        self._build_gizmo(self.selected)
+        self._rebaseline()
+        self.pl.render()
+        print(f"[reset] cleared vertex {self.selected}")
+
     # --- environment / lighting (M5/M6) -------------------------------------
     @staticmethod
     def _procedural_sky() -> pv.Texture:
@@ -580,7 +606,7 @@ class CageEditor:
             "Left-click a vertex to select. Drag the RED arrow to displace (normal),\n"
             "the GREEN ring to slide (along surface).\n"
             "[o] soft-select   [ [ / ] ] radius   [z] undo  [y] redo  [c] create-cage\n"
-            "[b] bake normal map (toggles preview)   [h] hide/show high poly\n"
+            "[x] reset point   [X] reset cage   [b] bake (toggles preview)   [h] hide high\n"
             "shift-drag = rotate the HDR lighting\n"
             f"Soft: {soft_label}",
             font_size=10,
@@ -601,6 +627,8 @@ class CageEditor:
         self.pl.add_key_event("c", self._create_cage)
         self.pl.add_key_event("b", self._bake)
         self.pl.add_key_event("h", self._toggle_high)
+        self.pl.add_key_event("x", self._reset_selected)
+        self.pl.add_key_event("X", self._reset_cage)
         self.pl.add_slider_widget(
             self._on_push, [0.0, self._push_max], value=self.global_push,
             title="cage offset", pointa=(0.025, 0.10), pointb=(0.31, 0.10),
