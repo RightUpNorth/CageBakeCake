@@ -29,7 +29,9 @@ import numpy as np
 import pyvista as pv
 import vtk
 
-from . import cage, meshio
+from . import bake, cage, meshio
+
+BAKE_RESOLUTION = 1024
 
 
 class CageEditor:
@@ -43,8 +45,10 @@ class CageEditor:
         off_screen: bool = False,
     ):
         self._low_path = low_path
+        self._high_path = high_path
         self._cage_path = cage_path
         self._hdr_path = hdr_path
+        self._preview_on = False
         self.low = meshio.load_mesh(low_path)
         # Hard normals stay on the low poly (they author the bake); the cage push uses
         # soft (welded) normals so the shell is watertight over hard edges. (M8.1)
@@ -490,6 +494,76 @@ class CageEditor:
         self._cage_path = out
         print(f"[create-cage] wrote {out}")
 
+    # --- bake (M7.4) --------------------------------------------------------
+    def _bake(self) -> None:
+        """Bake a tangent-space normal map from the high poly onto the low poly using
+        the current cage as the per-vertex ray bound, then preview it on the low poly.
+        Pressing the key again leaves the preview and returns to editing."""
+        if self._preview_on:
+            self._hide_preview()
+            return
+        if self.high is None:
+            self._bake_status("Bake needs a high poly (pass --high).")
+            self.pl.render()
+            return
+        try:
+            low_tris, low_uvs = meshio.load_faces_uvs(self._low_path)
+            if low_uvs is None:
+                self._bake_status("Bake failed: the low poly has no UVs.")
+                self.pl.render()
+                return
+            high_tris, _ = meshio.load_faces_uvs(self._high_path, with_uvs=False)
+        except Exception as exc:  # noqa: BLE001 - surface the error, don't crash the app
+            self._bake_status(f"Bake failed to read meshes: {exc}")
+            self.pl.render()
+            return
+
+        out = os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png"
+        self._bake_status(f"Baking {BAKE_RESOLUTION}x{BAKE_RESOLUTION} (this can take a while)...")
+        self.pl.render()
+        image = bake.bake(
+            self.low.points, low_tris, self.normals, low_uvs,
+            self.cage.points, self.high.points, high_tris,
+            np.asarray(self.high.point_normals, dtype=np.float64),
+            resolution=BAKE_RESOLUTION, out_path=out,
+            progress=lambda m: print(f"[bake] {m}"),
+        )
+        # Per-point UVs for the preview (last corner wins at seams - fine for preview).
+        pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
+        pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)
+        self._show_bake_preview(image, pp_uv)
+        self._bake_status(f"Baked -> {out}   [b] back to editing")
+        self.pl.render()
+
+    def _show_bake_preview(self, image: np.ndarray, pp_uv: np.ndarray) -> None:
+        preview = self.low.copy()
+        preview.active_texture_coordinates = pp_uv
+        self.pl.add_mesh(
+            preview, texture=pv.Texture(image), name="bake_preview", lighting=False,
+        )
+        # Hide the editing actors so the textured low poly is the only thing shown.
+        for nm in ("high", "low", "cage", "cage_pts"):
+            if nm in self.pl.actors:
+                self.pl.actors[nm].SetVisibility(False)
+        self._preview_on = True
+
+    def _hide_preview(self) -> None:
+        if "bake_preview" in self.pl.actors:
+            self.pl.remove_actor("bake_preview")
+        for nm in ("high", "low", "cage", "cage_pts"):
+            if nm in self.pl.actors:
+                self.pl.actors[nm].SetVisibility(True)
+        self._bake_status("")
+        self._preview_on = False
+        self.pl.render()
+
+    def _bake_status(self, msg: str) -> None:
+        if msg:
+            print(f"[bake] {msg}")
+        self.pl.add_text(
+            msg, position="lower_right", font_size=9, color="yellow", name="bake_status"
+        )
+
     # --- lifecycle ----------------------------------------------------------
     def _update_help(self) -> None:
         soft_label = f"ON r={self.soft_radius:.2f}" if self.soft_enabled else "OFF"
@@ -497,7 +571,7 @@ class CageEditor:
             "Left-click a vertex to select. Drag the RED arrow to displace (normal),\n"
             "the GREEN ring to slide (along surface).\n"
             "[o] soft-select   [ [ / ] ] radius   [z] undo  [y] redo  [c] create-cage\n"
-            "shift-drag = rotate the HDR lighting\n"
+            "[b] bake normal map (toggles preview)   shift-drag = rotate the HDR lighting\n"
             f"Soft: {soft_label}",
             font_size=10,
             name="help",
@@ -515,6 +589,7 @@ class CageEditor:
         self.pl.add_key_event("z", self._undo)
         self.pl.add_key_event("y", self._redo)
         self.pl.add_key_event("c", self._create_cage)
+        self.pl.add_key_event("b", self._bake)
         self.pl.add_slider_widget(
             self._on_push, [0.0, self._push_max], value=self.global_push,
             title="cage offset", pointa=(0.025, 0.10), pointb=(0.31, 0.10),
