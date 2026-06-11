@@ -1,8 +1,15 @@
 """Mesh loading.
 
 USD is the internal interchange format (see docs/environment.md). Source FBX/OBJ are
-converted to USD offline via tools/blender_to_usd.py; this module reads USD into a
+converted to USD offline via tools/blender_to_usd.py; this module reads USD into
 pyvista.PolyData with point normals, which is what the rest of the app consumes.
+
+A USD file can hold several mesh prims (FBX LOD groups, or a low poly split into
+material parts - e.g. bin_lp's uv_fix + uv_fix_001). `load_scene` returns each prim as
+its own display part *and* a merged mesh (with cached triangulation / UVs) for the cage
+and the bake, which need one topology-matched mesh. Loading all prims - rather than just
+the largest - is what lets the per-mesh visibility checklist exist and stops smaller
+prims being silently dropped.
 
 Everything downstream is format-blind, so adding another source format means adding a
 branch here and nothing else.
@@ -15,25 +22,18 @@ import pyvista as pv
 from pxr import Usd, UsdGeom
 
 
-def _largest_mesh_prim(stage: Usd.Stage):
-    """Pick the UsdGeom.Mesh prim with the most points.
+def _iter_mesh_prims(stage: Usd.Stage):
+    """Yield (prim, UsdGeom.Mesh) for every non-empty mesh prim, in traversal order.
 
-    FBX LOD groups come through as several Mesh prims (see docs/environment.md);
-    highest point count is a sane default that also works for single-mesh assets.
-    Returns (prim, UsdGeom.Mesh) or raises if the stage has no mesh.
+    Traversal order is the canonical ordering used everywhere here, so the merged mesh,
+    the cached triangulation and the per-part ranges all line up.
     """
-    best = None
-    best_n = -1
     for prim in stage.Traverse():
         if prim.IsA(UsdGeom.Mesh):
             mesh = UsdGeom.Mesh(prim)
             pts = mesh.GetPointsAttr().Get()
-            n = len(pts) if pts else 0
-            if n > best_n:
-                best, best_n = mesh, n
-    if best is None:
-        raise ValueError("no UsdGeom.Mesh prim found in stage")
-    return best
+            if pts is not None and len(pts) > 0:
+                yield prim, mesh
 
 
 def _faces_to_vtk(face_vertex_counts, face_vertex_indices) -> np.ndarray:
@@ -70,75 +70,124 @@ def _to_canonical_frame(points: np.ndarray, stage) -> np.ndarray:
     return points
 
 
-def load_mesh(path: str) -> pv.PolyData:
-    """Load a USD file into a pyvista.PolyData with world-space points and normals."""
-    stage = Usd.Stage.Open(str(path))
-    if stage is None:
-        raise ValueError(f"could not open USD stage: {path}")
-    mesh = _largest_mesh_prim(stage)
-
+def _prim_points(prim, mesh, stage, cache) -> np.ndarray:
+    """World-space, canonical-frame points for one prim (bakes in its xform)."""
     points = np.asarray(mesh.GetPointsAttr().Get(), dtype=np.float64)
-
-    # Bake the prim's world transform into the points (FBX import often carries a
-    # scale/axis xform). USD is row-vector * row-major-matrix, so points @ M.
-    xform = UsdGeom.XformCache().GetLocalToWorldTransform(mesh.GetPrim())
-    mat = np.asarray(xform, dtype=np.float64).reshape(4, 4)
+    # USD is row-vector * row-major-matrix, so points @ M.
+    mat = np.asarray(cache.GetLocalToWorldTransform(prim), dtype=np.float64).reshape(4, 4)
     homog = np.hstack([points, np.ones((len(points), 1))])
     points = (homog @ mat)[:, :3]
-    points = _to_canonical_frame(points, stage)
-
-    faces = _faces_to_vtk(
-        mesh.GetFaceVertexCountsAttr().Get(),
-        mesh.GetFaceVertexIndicesAttr().Get(),
-    )
-
-    poly = pv.PolyData(points, faces)
-    # Consistent point normals regardless of what the file stored.
-    poly = poly.compute_normals(
-        cell_normals=False, point_normals=True, auto_orient_normals=True
-    )
-    return poly
+    return _to_canonical_frame(points, stage)
 
 
-def load_faces_uvs(path: str, with_uvs: bool = True):
-    """Triangulated faces (and per-corner UVs) for baking, aligned to load_mesh's points.
-
-    `load_mesh` returns a render-ready PolyData but drops UVs and keeps quads/ngons; the
-    bake needs triangles and the low poly's faceVarying `st` layout. This fan-triangulates
-    the largest mesh prim and carries `st` through the same split, so uvs[f] holds the UVs
-    of triangle f's three corners. Vertex indices match load_mesh's point order, so the
-    triangles index straight into that PolyData's points / cage points.
-
-    Returns (tris (F,3) int64, uvs (F,3,2) float64 or None). `with_uvs=False` skips the
-    UV read entirely - used for the high poly, which only supplies hit geometry.
-    """
-    stage = Usd.Stage.Open(str(path))
-    if stage is None:
-        raise ValueError(f"could not open USD stage: {path}")
-    mesh = _largest_mesh_prim(stage)
-    counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get(), dtype=np.int64)
-    indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), dtype=np.int64)
-
-    # Fan triangulation: a face of c corners -> c-2 triangles (corner 0, k, k+1). Track
-    # each triangle corner's position in the original corner stream so a faceVarying
-    # primvar can be split identically.
+def _fan_triangulate(counts: np.ndarray, indices: np.ndarray):
+    """Fan-triangulate a polygon stream. A face of c corners -> c-2 triangles
+    (corner 0, k, k+1). Returns (tris (F,3) vertex ids, corner (F,3) corner-stream
+    indices) so a faceVarying primvar can be split the same way."""
     ntri = counts - 2
     starts = np.zeros(len(counts), dtype=np.int64)
     starts[1:] = np.cumsum(counts)[:-1]
     face = np.repeat(np.arange(len(counts)), ntri)
     k = np.arange(int(ntri.sum())) - np.repeat(np.cumsum(ntri) - ntri, ntri) + 1
     c0 = starts[face]
-    corner = np.stack([c0, c0 + k, c0 + k + 1], axis=1)  # (F,3) corner-stream indices
-    tris = indices[corner]                                # (F,3) vertex ids
+    corner = np.stack([c0, c0 + k, c0 + k + 1], axis=1)
+    tris = indices[corner]
+    return tris, corner
 
-    uvs = None
-    if with_uvs:
-        primvar = UsdGeom.PrimvarsAPI(mesh.GetPrim()).GetPrimvar("st")
-        if primvar and primvar.HasValue():
-            flat = np.asarray(primvar.ComputeFlattened(), dtype=np.float64)
-            interp = primvar.GetInterpolation()
-            if interp == UsdGeom.Tokens.faceVarying:
-                uvs = flat[corner]   # one UV per corner -> (F,3,2)
-            elif interp == UsdGeom.Tokens.vertex:
-                uvs = flat[tris]     # one UV per vertex
-    return tris, uvs
+
+def _read_st(mesh, corner: np.ndarray, tris: np.ndarray):
+    """Per-corner UVs (F,3,2) for a prim, or None if it has no `st` primvar."""
+    primvar = UsdGeom.PrimvarsAPI(mesh.GetPrim()).GetPrimvar("st")
+    if not (primvar and primvar.HasValue()):
+        return None
+    flat = np.asarray(primvar.ComputeFlattened(), dtype=np.float64)
+    interp = primvar.GetInterpolation()
+    if interp == UsdGeom.Tokens.faceVarying:
+        return flat[corner]
+    if interp == UsdGeom.Tokens.vertex:
+        return flat[tris]
+    return None
+
+
+def _load_prims(path: str, with_uvs: bool):
+    """Read every mesh prim into raw arrays (traversal order). Each entry has: name,
+    points (Vi,3), counts, indices (local), tris (Fi,3 local), uvs (Fi,3,2) or None."""
+    stage = Usd.Stage.Open(str(path))
+    if stage is None:
+        raise ValueError(f"could not open USD stage: {path}")
+    cache = UsdGeom.XformCache()
+    prims = []
+    for prim, mesh in _iter_mesh_prims(stage):
+        points = _prim_points(prim, mesh, stage, cache)
+        counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get(), dtype=np.int64)
+        indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), dtype=np.int64)
+        tris, corner = _fan_triangulate(counts, indices)
+        uvs = _read_st(mesh, corner, tris) if with_uvs else None
+        prims.append(
+            {"name": prim.GetName(), "points": points, "counts": counts,
+             "indices": indices, "tris": tris, "uvs": uvs}
+        )
+    if not prims:
+        raise ValueError(f"no UsdGeom.Mesh prim found in stage: {path}")
+    return prims
+
+
+def _poly(points: np.ndarray, counts: np.ndarray, indices: np.ndarray) -> pv.PolyData:
+    poly = pv.PolyData(points, _faces_to_vtk(counts, indices))
+    return poly.compute_normals(cell_normals=False, point_normals=True,
+                                auto_orient_normals=True)
+
+
+def load_scene(path: str, with_uvs: bool = True) -> dict:
+    """Load a USD file as a scene of parts plus a merged mesh.
+
+    Returns a dict:
+      parts  - list of (name, pv.PolyData) per prim, for individually toggleable display
+      merged - one pv.PolyData (all prims concatenated, point normals) for the cage and as
+               the bake's hit geometry; its point order is parts concatenated in order
+      tris   - (F,3) merged triangulation, indices into `merged`'s points
+      uvs    - (F,3,2) merged per-corner UVs, or None if any prim lacks `st`
+      ranges - list of (name, start, count) point spans of each part within `merged`,
+               so a per-merged-point array (e.g. the baked UVs) can be sliced per part
+    """
+    prims = _load_prims(path, with_uvs)
+    parts = [(p["name"], _poly(p["points"], p["counts"], p["indices"])) for p in prims]
+
+    pts, counts, idx, tris, ranges = [], [], [], [], []
+    have_uv = with_uvs and all(p["uvs"] is not None for p in prims)
+    uvs_list = []
+    offset = 0
+    for p in prims:
+        n = len(p["points"])
+        ranges.append((p["name"], offset, n))
+        pts.append(p["points"])
+        counts.append(p["counts"])
+        idx.append(p["indices"] + offset)
+        tris.append(p["tris"] + offset)
+        if have_uv:
+            uvs_list.append(p["uvs"])
+        offset += n
+
+    if len(prims) == 1:
+        merged = parts[0][1]  # reuse; avoids duplicating a multi-million-point high poly
+    else:
+        merged = _poly(np.concatenate(pts), np.concatenate(counts), np.concatenate(idx))
+    return {
+        "parts": parts,
+        "merged": merged,
+        "tris": np.concatenate(tris) if len(tris) > 1 else tris[0],
+        "uvs": np.concatenate(uvs_list) if have_uv else None,
+        "ranges": ranges,
+    }
+
+
+def load_mesh(path: str) -> pv.PolyData:
+    """Merged mesh only (point normals). Used for the cage, which is one mesh."""
+    return load_scene(path, with_uvs=False)["merged"]
+
+
+def load_faces_uvs(path: str, with_uvs: bool = True):
+    """Merged (tris (F,3), uvs (F,3,2) or None) - the bake's low-poly input. Kept for
+    callers that only need the triangulation; `load_scene` returns the same arrays."""
+    scene = load_scene(path, with_uvs)
+    return scene["tris"], scene["uvs"]
