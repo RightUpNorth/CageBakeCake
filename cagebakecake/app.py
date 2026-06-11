@@ -21,6 +21,7 @@ global slider can layer on top (Milestone 3).
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 
@@ -37,11 +38,13 @@ class CageEditor:
         low_path: str,
         high_path: str | None = None,
         cage_path: str | None = None,
+        hdr_path: str | None = None,
         global_push: float = 0.03,
         off_screen: bool = False,
     ):
         self._low_path = low_path
         self._cage_path = cage_path
+        self._hdr_path = hdr_path
         self.low = meshio.load_mesh(low_path)
         # Hard normals stay on the low poly (they author the bake); the cage push uses
         # soft (welded) normals so the shell is watertight over hard edges. (M8.1)
@@ -74,6 +77,12 @@ class CageEditor:
         self._press_tag = None
         self._release_tag = None
 
+        # HDR environment rotation (shift-drag).
+        self._env_rotating = False
+        self._env_yaw = 0.0
+        self._env_yaw0 = 0.0
+        self._env_start_x = 0
+
         # Undo/redo history of manual_delta snapshots.
         self._history: list[np.ndarray] = [self.manual_delta.copy()]
         self._hist_index = 0
@@ -90,6 +99,7 @@ class CageEditor:
         self._recompose()
 
         diag = float(np.linalg.norm(np.ptp(self.base, axis=0)))
+        self._diag = diag
         self._handle_radius = diag * 0.02
         self._axis_len = diag * 0.14
         self.soft_radius = diag * 0.1
@@ -101,6 +111,7 @@ class CageEditor:
         self._mesh_picker = vtk.vtkCellPicker()
         self._mesh_picker.SetTolerance(0.005)
         self._add_actors()
+        self._setup_environment()
 
     # --- geometry -----------------------------------------------------------
     def _recompose(self) -> None:
@@ -109,9 +120,12 @@ class CageEditor:
         )
 
     def _add_actors(self) -> None:
-        # High poly: the opaque, shaded reference the cage wraps (PBR comes in M5).
+        # High poly: opaque PBR reference lit by the HDR environment (M5/M6).
         if self.high is not None:
-            self.pl.add_mesh(self.high, color="tan", smooth_shading=True, name="high")
+            self.pl.add_mesh(
+                self.high, color="tan", pbr=True, metallic=0.15, roughness=0.5,
+                smooth_shading=True, name="high",
+            )
         self.pl.add_mesh(self.low, style="wireframe", color="white", line_width=1, name="low")
         self.cage_actor = self.pl.add_mesh(
             self.cage, color="cyan", opacity=0.35, name="cage", show_edges=False
@@ -229,6 +243,14 @@ class CageEditor:
 
     def _on_press(self, obj, _event) -> None:
         x, y = self._event_xy()
+        if obj.GetShiftKey():
+            # Shift-drag rotates the HDR environment (moves the lighting).
+            self._env_rotating = True
+            self._env_start_x = x
+            self._env_yaw0 = self._env_yaw
+            self._suppress_camera(True)
+            self._abort(obj, self._press_tag)
+            return
         actor = self._handle_under_cursor(x, y) if self.selected is not None else None
         if actor is not None:
             # Grab the handle: drag, and suppress the camera for the drag's duration.
@@ -247,14 +269,23 @@ class CageEditor:
 
     def _on_move(self, _obj, _event) -> None:
         x, y = self._event_xy()
-        if self._dragging:
+        if self._env_rotating:
+            self._env_yaw = self._env_yaw0 + (x - self._env_start_x) * 0.01
+            self._apply_env_rotation()
+            self.pl.render()
+        elif self._dragging:
             self._apply_drag(x, y)
         else:
             self._hover(x, y)
 
     def _on_release(self, obj, _event) -> None:
-        # Only fires for us during a handle drag (the temporary vtkInteractorStyleUser
-        # does not swallow release the way pyvista's capture style does).
+        # Only fires for us during a handle / environment drag (the temporary
+        # vtkInteractorStyleUser does not swallow release like pyvista's capture style).
+        if self._env_rotating:
+            self._env_rotating = False
+            self._suppress_camera(False)
+            self._abort(obj, self._release_tag)
+            return
         if self._dragging:
             self._dragging = False
             self._suppress_camera(False)
@@ -373,6 +404,58 @@ class CageEditor:
             print(f"[redo] state {self._hist_index}/{len(self._history) - 1}")
             self._restore_state(self._history[self._hist_index])
 
+    # --- environment / lighting (M5/M6) -------------------------------------
+    @staticmethod
+    def _procedural_sky() -> pv.Texture:
+        """A soft equirectangular sky (cool top, warm ground, one broad sun) so PBR
+        has image-based lighting without needing an external HDR."""
+        h, w = 256, 512
+        v = np.linspace(1.0, 0.0, h)[:, None, None]
+        top = np.array([0.45, 0.62, 0.95])
+        bottom = np.array([0.35, 0.30, 0.28])
+        grad = bottom + (top - bottom) * v  # (h, 1, 3)
+        yy, xx = np.mgrid[0:h, 0:w]
+        sun = np.exp(-((xx - w * 0.65) ** 2) / (2 * 60.0**2)) * np.exp(
+            -((yy - h * 0.28) ** 2) / (2 * 45.0**2)
+        )
+        img = grad + sun[..., None] * np.array([1.2, 1.1, 0.9])
+        return pv.Texture((np.clip(img, 0.0, 1.0) * 255).astype(np.uint8))
+
+    def _load_hdr(self, path: str) -> pv.Texture:
+        import imageio.v3 as iio
+
+        img = np.asarray(iio.imread(path))
+        if img.dtype != np.uint8:  # HDR float -> tonemap to 8-bit for the texture
+            img = np.clip(img / (img.max() or 1.0), 0.0, 1.0)
+            img = (img * 255).astype(np.uint8)
+        return pv.Texture(img[..., :3])
+
+    def _setup_environment(self) -> None:
+        # HDR / procedural sky gives ambient image-based lighting + reflections.
+        try:
+            tex = self._load_hdr(self._hdr_path) if self._hdr_path else self._procedural_sky()
+        except Exception as exc:  # noqa: BLE001 - fall back rather than fail to open
+            print(f"[hdr] could not load {self._hdr_path}: {exc}; using procedural sky")
+            tex = self._procedural_sky()
+        self.pl.set_environment_texture(tex, show_background=False)
+        # VTK bakes the IBL once and will not re-orient it live, so a movable key
+        # light provides the directional "sun" that shift-drag orbits.
+        self._key_light = pv.Light(light_type="scene light", intensity=0.8)
+        self.pl.add_light(self._key_light)
+        self._env_center = np.asarray(self.cage.center, dtype=np.float64)
+        self._apply_env_rotation()
+
+    def _apply_env_rotation(self) -> None:
+        """Orbit the key light about the world-up (Z) axis - shift-drag moves the
+        lighting direction across the high poly."""
+        el = math.radians(35.0)
+        az = self._env_yaw
+        offset = self._diag * 2.0 * np.array(
+            [math.cos(az) * math.cos(el), math.sin(az) * math.cos(el), math.sin(el)]
+        )
+        self._key_light.position = tuple(self._env_center + offset)
+        self._key_light.focal_point = tuple(self._env_center)
+
     # --- sliders ------------------------------------------------------------
     def _gizmo_follow(self) -> None:
         """Move the gizmo/soft-region to track the selected vertex after the cage
@@ -414,6 +497,7 @@ class CageEditor:
             "Left-click a vertex to select. Drag the RED arrow to displace (normal),\n"
             "the GREEN ring to slide (along surface).\n"
             "[o] soft-select   [ [ / ] ] radius   [z] undo  [y] redo  [c] create-cage\n"
+            "shift-drag = rotate the HDR lighting\n"
             f"Soft: {soft_label}",
             font_size=10,
             name="help",
