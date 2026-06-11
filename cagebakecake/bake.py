@@ -144,6 +144,7 @@ def bake(
     high_normals: np.ndarray,
     resolution: int = 1024,
     out_path: str | None = None,
+    progress=None,
 ) -> np.ndarray:
     """Bake a tangent-space normal map; return the (N,N,3) uint8 buffer.
 
@@ -164,7 +165,9 @@ def bake(
             "triangles (the low poly must carry a UV layout - see docs/baking.md)"
         )
 
+    notify = progress or (lambda _msg: None)
     n = int(resolution)
+    notify(f"rasterizing {low_tris.shape[0]} triangles into {n}x{n}")
     yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, n)
     image = np.tile(FLAT_RGB, (n, n, 1))
     if tri_index.size == 0:
@@ -188,6 +191,7 @@ def bake(
     origins = surf + direction * (offset[:, None] + eps)  # start at the cage, outside
     max_len = 2.0 * offset + 2.0 * eps  # sweep through the surface and equally inside
 
+    notify(f"casting {len(origins)} rays into {high_tris.shape[0]} high-poly triangles")
     hit_normals, hit_mask = _cast_to_high(
         origins, -direction, max_len, high_points, high_tris, high_normals
     )
@@ -203,9 +207,11 @@ def bake(
     )
     hit_yx = yx[hit_mask]
     image[hit_yx[:, 0], hit_yx[:, 1]] = rgb
+    notify(f"{int(hit_mask.sum())}/{len(yx)} texels hit")
 
     if out_path:
         _write_png(out_path, image)
+        notify(f"wrote {out_path}")
     return image
 
 

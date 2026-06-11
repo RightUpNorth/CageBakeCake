@@ -222,3 +222,6 @@ __marimo__/
 assets/fbx/
 assets/obj/
 assets/usd/
+
+# Baked normal maps written by the Bake button (derived artifacts).
+*_normal.png
