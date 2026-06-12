@@ -37,6 +37,7 @@ caveat. Check off as they land.
 
 ## Housekeeping
 
-- [ ] Remove the stale `--push 0.003` test snippet from the README.
-- [ ] Mark the milestone-7 follow-ups (converter reconciliation, scale-relative push)
-      resolved instead of open.
+- [x] Replaced the stale README Status / "Design phase" / `--push 0.003` snippet with an
+      accurate status and quickstart.
+- [x] Marked the milestone-7 follow-ups (converter reconciliation, scale-relative push)
+      resolved.

@@ -25,15 +25,24 @@ artist tune the cage and bake directly, with minimal dependencies.
 
 ## Status
 
-Design phase. This repository currently contains design documentation only; no
-implementation has been written yet. See `docs/` for the full design and
-`docs/roadmap.md` for the planned build order.
+Implemented. Roadmap milestones M1-M8 are complete (load, displacement/transparency
+sliders, vertex gizmo, PBR + HDR, the cage-bounded normal-map bake, and soft-normal /
+skew firing), plus the stretch goals (Qt front end, supersampling, UV-island padding,
+AO + curvature maps, arbitrary non-topology-matched cages). See `docs/roadmap.md` and
+`docs/stretch-goals.md`.
 
-## Planned quickstart (not yet implemented)
+## Quickstart
+
+Install the dependencies into a virtualenv, then launch the Qt window:
 
 ```
-python -m cagebakecake low.obj cage.obj high.obj --hdr env.hdr
+python -m pip install -r requirements.txt
+python -m cagebakecake assets\usd\bin_lp.usdc --high assets\usd\bin_hp_nolid.usdc
 ```
+
+With no arguments it opens on the bundled Mat Ball low/high pair. Useful flags:
+`--cage cage.usdc`, `--hdr env.hdr`, `--push <world units>`, `--no-qt` (standalone
+pyvista window), `--screenshot out.png` (headless render and exit).
 
 ## License
 
