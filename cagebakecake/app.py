@@ -63,8 +63,10 @@ class CageEditor:
         # and is the default, so the firing direction matches the pre-skew behaviour.
         self.hard_normals = np.asarray(self.low.point_normals, dtype=np.float64).copy()
         self.soft_normals = cage.soft_vertex_normals(self.low.points, self.hard_normals)
-        self.skew = 1.0  # 0 = fire along hard normals, 1 = soft
-        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew)
+        self.skew = 1.0  # uniform skew value (the slider); 0 = hard, 1 = soft
+        # Per-vertex skew weights so skew can be painted per region (default uniform).
+        self.skew_map = np.full(len(self.hard_normals), self.skew, dtype=np.float64)
+        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
         if high_path:
             high_scene = meshio.load_scene(high_path, with_uvs=False)
             self.high = high_scene["merged"]
@@ -155,6 +157,9 @@ class CageEditor:
         self._baked_uv: np.ndarray | None = None
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
+        self._paint_skew = False    # paint mode: left-drag paints skew instead of selecting
+        self._paint_value = 0.0     # brush target skew (0 = hard, 1 = soft)
+        self._painting = False
         self._bake_size = (BAKE_RESOLUTION, BAKE_RESOLUTION)  # (width, height); set by the dock
         self._supersample = 1   # anti-alias multiple (bake at NxN, average down)
         self._padding = 0       # UV-island edge padding in texels (0 = none)
@@ -570,6 +575,15 @@ class CageEditor:
             self._suppress_camera(True)
             self._abort(obj, self._press_tag)
             return
+        if self._paint_skew:
+            # Paint mode: left-drag paints the brush skew onto the mesh under the cursor.
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.paint_skew_at(self._mesh_picker.GetPickPosition(), self._paint_value)
+                self._painting = True
+                self._suppress_camera(True)
+                self._abort(obj, self._press_tag)
+            return
         actor = self._handle_under_cursor(x, y) if self.selected is not None else None
         if actor is not None:
             # Grab the handle: drag, and suppress the camera for the drag's duration.
@@ -597,7 +611,11 @@ class CageEditor:
             cx, cy = self._click_deselect
             if abs(x - cx) + abs(y - cy) > 4:
                 self._click_deselect = None  # it became an orbit, not a click
-        if self._env_rotating:
+        if self._painting:
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.paint_skew_at(self._mesh_picker.GetPickPosition(), self._paint_value)
+        elif self._env_rotating:
             self._env_yaw = self._env_yaw0 + (x - self._env_start_x) * 0.01
             self._apply_env_rotation()
             self.pl.render()
@@ -609,6 +627,11 @@ class CageEditor:
     def _on_release(self, obj, _event) -> None:
         # Only fires for us during a handle / environment drag (the temporary
         # vtkInteractorStyleUser does not swallow release like pyvista's capture style).
+        if self._painting:
+            self._painting = False
+            self._suppress_camera(False)
+            self._abort(obj, self._release_tag)
+            return
         if self._env_rotating:
             self._env_rotating = False
             self._suppress_camera(False)
@@ -853,12 +876,9 @@ class CageEditor:
     def _on_opacity(self, value: float) -> None:
         self.cage_actor.prop.opacity = float(value)
 
-    def set_skew(self, value: float) -> None:
-        """M8.2 skew: blend the cage push / bake ray direction between the hard normals
-        (0) and the soft welded normals (1). Recomposes the cage along the new direction;
-        cage points and any selected gizmo follow."""
-        self.skew = float(np.clip(value, 0.0, 1.0))
-        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew)
+    def _reblend_skew(self) -> None:
+        """Recompute firing normals from the skew map and recompose; keep the gizmo on."""
+        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
         self._recompose()
         if self.selected is not None:
             self._build_gizmo(self.selected)
@@ -866,6 +886,31 @@ class CageEditor:
         else:
             self._gizmo_follow()
         self.pl.render()
+
+    def set_skew(self, value: float) -> None:
+        """M8.2 skew (uniform): set every vertex's skew, blending the cage push / bake ray
+        direction between the hard normals (0) and the soft welded normals (1)."""
+        self.skew = float(np.clip(value, 0.0, 1.0))
+        self.skew_map[:] = self.skew
+        self._reblend_skew()
+
+    def paint_skew_at(self, point, value: float, radius: float | None = None) -> None:
+        """Paint skew into vertices near `point` with a smooth falloff (stretch: paintable
+        skew). value in [0,1]; the brush blends each affected vertex toward it by weight."""
+        radius = self.soft_radius if radius is None else float(radius)
+        idx, w = cage.soft_weights(self.cage.points, np.asarray(point, dtype=np.float64), radius)
+        if len(idx) == 0:
+            return
+        value = float(np.clip(value, 0.0, 1.0))
+        self.skew_map[idx] = np.clip(self.skew_map[idx] * (1.0 - w) + value * w, 0.0, 1.0)
+        self._reblend_skew()
+
+    def set_paint_skew(self, on: bool) -> None:
+        """Toggle skew paint mode (left-drag on the mesh paints the brush value)."""
+        self._paint_skew = bool(on)
+
+    def set_paint_value(self, value: float) -> None:
+        self._paint_value = float(np.clip(value, 0.0, 1.0))
 
     # --- create cage --------------------------------------------------------
     def _create_cage(self) -> None:
