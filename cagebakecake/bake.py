@@ -288,6 +288,118 @@ def _pad_islands(image: np.ndarray, mask: np.ndarray, padding: int) -> np.ndarra
     return out
 
 
+# --- extra maps: ambient occlusion + curvature (stretch) -------------------
+def _tangent_basis_array(normals: np.ndarray):
+    """Per-row orthonormal (T, B) spanning the plane perpendicular to each normal."""
+    ref = np.where(np.abs(normals[:, :1]) < 0.9, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+    t = np.cross(normals, ref)
+    t = t / (np.linalg.norm(t, axis=1, keepdims=True) + 1e-12)
+    b = np.cross(normals, t)
+    return t, b
+
+
+def _hemisphere(n: int) -> np.ndarray:
+    """`n` cosine-weighted directions over the +Z hemisphere (deterministic Fibonacci),
+    so AO is reproducible. z is up (the surface normal)."""
+    i = np.arange(n)
+    r = np.sqrt((i + 0.5) / n)
+    golden = np.pi * (3.0 - np.sqrt(5.0))
+    theta = i * golden
+    z = np.sqrt(np.clip(1.0 - r * r, 0.0, 1.0))
+    return np.stack([r * np.cos(theta), r * np.sin(theta), z], axis=1)
+
+
+def _gray_to_rgb(gray: np.ndarray) -> np.ndarray:
+    """(H,W) float in [0,1] -> (H,W,3) uint8 grayscale (rounded, so 0.5 -> 128)."""
+    g = np.clip(np.round(gray * 255.0), 0, 255).astype(np.uint8)
+    return np.repeat(g[:, :, None], 3, axis=2)
+
+
+def bake_ao(
+    low_points, low_tris, low_normals, low_uvs,
+    high_points, high_tris,
+    resolution: "int | tuple[int, int]" = 1024,
+    samples: int = 64,
+    max_dist: float | None = None,
+    out_path: str | None = None,
+    progress=None,
+    padding: int = 0,
+) -> np.ndarray:
+    """Bake an ambient-occlusion map of the high poly onto the low poly's UVs.
+
+    Per covered texel: fire `samples` cosine-weighted rays over the hemisphere around the
+    shading normal and measure the fraction blocked by the high poly within `max_dist`
+    (default half the low-poly bbox diagonal). AO = 1 - occluded fraction; white is open,
+    dark is occluded. Background stays white. `padding` bleeds past island edges.
+    """
+    low_uvs = np.asarray(low_uvs, dtype=np.float64)
+    if low_uvs.size == 0 or low_uvs.shape != (low_tris.shape[0], 3, 2):
+        raise ValueError("low poly has no usable UVs: bake_ao needs per-corner UVs (F,3,2)")
+    notify = progress or (lambda _msg: None)
+    width, height = (resolution, resolution) if isinstance(resolution, int) else (
+        int(resolution[0]), int(resolution[1]))
+    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, width, height)
+    image = np.full((height, width, 3), 255, dtype=np.uint8)  # open = white
+    if tri_index.size == 0:
+        if out_path:
+            _write_png(out_path, image)
+        return image
+
+    corners = low_tris[tri_index]
+    w = bary[:, :, None]
+    surf = np.sum(low_points[corners] * w, axis=1)
+    nrm = np.sum(low_normals[corners] * w, axis=1)
+    nrm = nrm / (np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12)
+    tan, bit = _tangent_basis_array(nrm)
+
+    if max_dist is None:
+        max_dist = 0.5 * float(np.linalg.norm(np.ptp(low_points, axis=0)))
+    eps = max_dist * 1e-3 + 1e-9
+    origins = surf + nrm * eps
+
+    import trimesh
+    mesh = trimesh.Trimesh(vertices=np.asarray(high_points, dtype=np.float64),
+                           faces=np.asarray(high_tris, dtype=np.int64), process=False)
+    notify(f"AO: {samples} rays x {len(origins)} texels into {len(high_tris)} triangles")
+    occ = np.zeros(len(origins))
+    for lx, ly, lz in _hemisphere(int(samples)):
+        d = tan * lx + bit * ly + nrm * lz
+        loc, ray_idx, _tri = mesh.ray.intersects_location(
+            ray_origins=origins, ray_directions=d, multiple_hits=False)
+        if len(ray_idx):
+            dist = np.linalg.norm(loc - origins[ray_idx], axis=1)
+            np.add.at(occ, ray_idx[dist <= max_dist], 1.0)
+    ao = 1.0 - occ / float(samples)
+
+    gray = np.clip(ao * 255.0, 0, 255).astype(np.uint8)
+    image[yx[:, 0], yx[:, 1]] = np.repeat(gray[:, None], 3, axis=1)  # per-texel grayscale
+    notify("AO done")
+    if padding > 0:
+        mask = np.zeros((height, width), dtype=bool)
+        mask[yx[:, 0], yx[:, 1]] = True
+        image = _pad_islands(image, mask, int(padding))
+    if out_path:
+        _write_png(out_path, image)
+        notify(f"wrote {out_path}")
+    return image
+
+
+def curvature_from_normal_map(normal_image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """Derive a curvature map from a tangent-space normal map (cheap 2D post-process).
+
+    Curvature ~ the divergence of the tangent normal's xy across UV space: convex ridges
+    go bright, concave cavities dark, flat stays neutral grey (128). Useful for masks.
+    """
+    from scipy import ndimage
+
+    img = np.asarray(normal_image, dtype=np.float64)
+    nx = img[..., 0] / 255.0 * 2.0 - 1.0
+    ny = img[..., 1] / 255.0 * 2.0 - 1.0
+    div = ndimage.sobel(nx, axis=1) + ndimage.sobel(ny, axis=0)
+    gray = np.clip(0.5 + div * strength * 0.5, 0.0, 1.0)
+    return _gray_to_rgb(gray)
+
+
 # --- cage-bounded ray casting (Phase 7.2) ----------------------------------
 def _cast_to_high(
     origins: np.ndarray,

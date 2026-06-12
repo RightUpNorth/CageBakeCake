@@ -150,6 +150,7 @@ class CageEditor:
         self._bake_size = (BAKE_RESOLUTION, BAKE_RESOLUTION)  # (width, height); set by the dock
         self._supersample = 1   # anti-alias multiple (bake at NxN, average down)
         self._padding = 0       # UV-island edge padding in texels (0 = none)
+        self._ao_samples = 64   # hemisphere rays per texel for the AO bake
         # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
         # links a low part and a high part that share a prim name (toggling one toggles both).
         self._part_vis: dict[tuple[str, int], bool] = {}
@@ -878,6 +879,45 @@ class CageEditor:
     def set_padding(self, px: int) -> None:
         """UV-island edge padding in texels bled into the background (dock dropdown)."""
         self._padding = max(0, int(px))
+
+    def set_ao_samples(self, n: int) -> None:
+        """Hemisphere rays per texel for the AO bake (dock dropdown)."""
+        self._ao_samples = max(1, int(n))
+
+    def _bake_ao(self, out_path: str | None = None) -> None:
+        """Bake an ambient-occlusion map of the high poly onto the low poly's UVs and
+        write it next to the low poly (or to `out_path`)."""
+        if self.high is None:
+            self._bake_status("AO needs a high poly (pass --high).")
+            self.pl.render()
+            return
+        if self._cached_low_uvs is None:
+            self._bake_status("AO failed: the low poly has no UVs.")
+            self.pl.render()
+            return
+        w, h = self._bake_size
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png")
+        self._bake_status(f"Baking AO {w}x{h} ({self._ao_samples} rays/texel)...")
+        self.pl.render()
+        bake.bake_ao(
+            self.low.points, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            self.high.points, self._cached_high_tris, resolution=(w, h),
+            samples=self._ao_samples, padding=self._padding, out_path=out,
+            progress=lambda m: print(f"[ao] {m}"),
+        )
+        self._bake_status(f"Baked AO -> {out}")
+        self.pl.render()
+
+    def _bake_curvature(self, out_path: str | None = None) -> None:
+        """Derive a curvature map from the last baked normal map and write it out."""
+        if self._baked_image is None:
+            self._bake_status("Curvature needs a normal-map bake first (press Bake).")
+            self.pl.render()
+            return
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_curv.png")
+        bake._write_png(out, bake.curvature_from_normal_map(self._baked_image))
+        self._bake_status(f"Baked curvature -> {out}")
+        self.pl.render()
 
     def _bake(self, out_path: str | None = None, resolution=None) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using the
