@@ -21,8 +21,10 @@ caveat. Check off as they land.
 
 ## Cage / interaction
 
-- [ ] **Arbitrary (non-topology-matched) cage** - nearest-point + normal interpolation
-      so a cage that is not a vertex-for-vertex duplicate still works. (headless)
+- [x] **Arbitrary (non-topology-matched) cage** - `cage.resample_cage` casts each low
+      vertex along its normal to the loaded cage (nearest cage vertex on a miss), turning
+      a non-matching cage into an editable topology-matched base. The app uses it
+      automatically when the cage vertex count differs from the low poly.
 - [ ] **Paintable skew** - per-region skew weight map instead of a single value.
       `blend_normals` already takes a per-vertex skew; needs a paint UI (desktop check).
 - [ ] **Free 3-axis gizmo** - move a vertex on all axes, not only along the normal.

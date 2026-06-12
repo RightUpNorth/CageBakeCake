@@ -75,11 +75,19 @@ class CageEditor:
             self.high_parts = []
             self._cached_high_tris = None
 
-        # The cage's rest geometry: a loaded cage (topology-checked) or the low poly.
+        # The cage's rest geometry: a topology-matched cage is used directly; a cage with
+        # different topology is resampled onto the low poly along its normals so the rest of
+        # the editor still has one cage vertex per low vertex (stretch: arbitrary cages).
         if cage_path:
             cage_mesh = meshio.load_mesh(cage_path)
-            cage.validate_correspondence(self.low.points, cage_mesh.points)
-            self.base = np.asarray(cage_mesh.points, dtype=np.float64).copy()
+            if len(cage_mesh.points) == len(self.low.points):
+                self.base = np.asarray(cage_mesh.points, dtype=np.float64).copy()
+            else:
+                cage_tris, _ = meshio.load_faces_uvs(cage_path, with_uvs=False)
+                print(f"[cage] {len(cage_mesh.points)} cage verts != {len(self.low.points)} "
+                      "low verts; resampling the cage onto the low poly")
+                self.base = cage.resample_cage(
+                    self.low.points, self.normals, cage_mesh.points, cage_tris)
         else:
             self.base = np.asarray(self.low.points, dtype=np.float64).copy()
         # Default the cage offset to a fraction of the mesh size so it is sensible at any
