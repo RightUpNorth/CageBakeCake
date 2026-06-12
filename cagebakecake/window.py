@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
 
         self._interactor: QtInteractor | None = None
         self.editor: CageEditor | None = None
+        self._cancel = False  # set by the Cancel button, polled by the AO bake loop
 
         self._build_menu()
         self._build_dock()
@@ -212,6 +213,10 @@ class MainWindow(QMainWindow):
         curv_btn.clicked.connect(self._bake_curvature)
         form.addRow(curv_btn)
 
+        cancel_btn = QPushButton("Cancel bake")
+        cancel_btn.clicked.connect(self._cancel_bake)
+        form.addRow(cancel_btn)
+
         reset_cage_btn = QPushButton("Reset Cage")
         reset_cage_btn.clicked.connect(self._reset_cage)
         form.addRow(reset_cage_btn)
@@ -352,22 +357,34 @@ class MainWindow(QMainWindow):
     def _reset_point(self) -> None:
         self.editor._reset_selected()
 
+    def _progress(self, msg: str) -> None:
+        """Bake progress callback: show it and pump the event loop so the Cancel button
+        (and per-sample AO progress) stay responsive during a bake."""
+        self._set_status(msg)
+        QApplication.processEvents()
+
+    def _cancel_bake(self) -> None:
+        self._cancel = True
+
     def _bake(self) -> None:
+        self._cancel = False
         self._set_status("Baking (this can take a while)...")
         QApplication.processEvents()
-        self.editor._bake()
+        self.editor._bake(progress=self._progress, should_cancel=lambda: self._cancel)
         # The bake switches the low poly to shaded + normal map; reflect that in the dock.
         for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
             w.blockSignals(True)
             w.setChecked(checked)
             w.blockSignals(False)
-        self._set_status("Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
+        self._set_status("Bake cancelled." if self._cancel
+                         else "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
 
     def _bake_ao(self) -> None:
+        self._cancel = False
         self._set_status("Baking AO (this can take a while)...")
         QApplication.processEvents()
-        self.editor._bake_ao()
-        self._set_status("AO baked (written next to the low poly).")
+        self.editor._bake_ao(progress=self._progress, should_cancel=lambda: self._cancel)
+        self._set_status("AO cancelled." if self._cancel else "AO baked (next to the low poly).")
 
     def _bake_curvature(self) -> None:
         self.editor._bake_curvature()

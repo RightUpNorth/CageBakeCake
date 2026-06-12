@@ -144,6 +144,22 @@ def test_curvature_flat_is_neutral_and_edges_show():
     assert not np.all(curv2 == 128)  # the step registers as curvature
 
 
+def test_bake_cancel_returns_none():
+    lp, lt, ln, luv = _low_quad()
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
+    out = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=16,
+                    should_cancel=lambda: True)
+    assert out is None
+
+
+def test_ao_cancel_returns_none():
+    lp, lt, ln, luv = _low_quad()
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
+    out = bake.bake_ao(lp, lt, ln, luv, hp, ht, resolution=16, samples=8,
+                       should_cancel=lambda: True)
+    assert out is None
+
+
 def test_no_uvs_raises():
     lp, lt, ln, _ = _low_quad()
     hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
