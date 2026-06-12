@@ -27,8 +27,9 @@ caveat. Check off as they land.
       automatically when the cage vertex count differs from the low poly.
 - [ ] **Paintable skew** - per-region skew weight map instead of a single value.
       `blend_normals` already takes a per-vertex skew; needs a paint UI (desktop check).
-- [ ] **Free 3-axis gizmo** - move a vertex on all axes, not only along the normal.
-      (desktop check)
+- [x] **Free 3-axis gizmo** - a blue cube handle drags the vertex in the camera-facing
+      plane (reuses the tested `ray_plane_intersect` with the view direction), alongside
+      the red normal arrow and green tangent ring. Drag feel needs a desktop check.
 
 ## Bake UX
 
