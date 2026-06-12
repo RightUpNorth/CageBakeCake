@@ -116,6 +116,16 @@ class MainWindow(QMainWindow):
         self._skew_label = QLabel("-")
         form.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
 
+        self._paint_skew = QCheckBox("Paint skew (left-drag, brush = soft radius)")
+        self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
+        form.addRow(self._paint_skew)
+
+        self._paint_value = QSlider(Qt.Horizontal)
+        self._paint_value.setRange(0, _SLIDER_STEPS)
+        self._paint_value.valueChanged.connect(self._on_paint_value)
+        self._paint_value_label = QLabel("-")
+        form.addRow("Brush skew", self._labeled(self._paint_value, self._paint_value_label))
+
         self._soft = QCheckBox("Soft select")
         self._soft.toggled.connect(self._on_soft)
         form.addRow(self._soft)
@@ -274,7 +284,8 @@ class MainWindow(QMainWindow):
         """Push the editor's current ranges/values into the dock widgets without
         triggering their change handlers (which would feed back into the editor)."""
         ed = self.editor
-        widgets = (self._offset, self._opacity, self._skew, self._soft, self._radius,
+        widgets = (self._offset, self._opacity, self._skew, self._paint_skew,
+                   self._paint_value, self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
@@ -287,6 +298,9 @@ class MainWindow(QMainWindow):
         self._opacity.setValue(35)
         self._skew.setValue(round(ed.skew * _SLIDER_STEPS))
         self._skew_label.setText(f"{ed.skew:.2f}")
+        self._paint_skew.setChecked(ed._paint_skew)
+        self._paint_value.setValue(round(ed._paint_value * _SLIDER_STEPS))
+        self._paint_value_label.setText(f"{ed._paint_value:.2f}")
         self._soft.setChecked(ed.soft_enabled)
         self._radius_max = ed._diag * 0.5
         self._radius.setValue(round(ed.soft_radius / self._radius_max * _SLIDER_STEPS))
@@ -333,6 +347,11 @@ class MainWindow(QMainWindow):
         value = step / _SLIDER_STEPS
         self.editor.set_skew(value)
         self._skew_label.setText(f"{value:.2f}")
+
+    def _on_paint_value(self, step: int) -> None:
+        value = step / _SLIDER_STEPS
+        self.editor.set_paint_value(value)
+        self._paint_value_label.setText(f"{value:.2f}")
 
     def _on_soft(self, checked: bool) -> None:
         self.editor.set_soft_enabled(checked)
