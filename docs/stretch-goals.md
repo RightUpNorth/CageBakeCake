@@ -32,8 +32,12 @@ caveat. Check off as they land.
 
 ## Bake UX
 
-- [ ] **Cancellable bake with progress** - core cancellation hook is headless; the
-      threaded Qt progress/cancel UI needs a desktop check.
+- [x] **Cancellable bake with progress** - `bake.bake` / `bake.bake_ao` take a
+      `should_cancel` predicate and emit progress; they return None when cancelled. The
+      dock shows live progress and a "Cancel bake" button (the bake runs on the UI thread
+      and pumps events via the progress callback, so cancel and per-sample AO progress
+      stay responsive). The AO bake is fully interruptible per sample; the normal bake's
+      single ray cast is one embree call, so it can only be cancelled before the cast.
 
 ## Housekeeping
 

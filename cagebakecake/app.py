@@ -892,7 +892,7 @@ class CageEditor:
         """Hemisphere rays per texel for the AO bake (dock dropdown)."""
         self._ao_samples = max(1, int(n))
 
-    def _bake_ao(self, out_path: str | None = None) -> None:
+    def _bake_ao(self, out_path: str | None = None, progress=None, should_cancel=None) -> None:
         """Bake an ambient-occlusion map of the high poly onto the low poly's UVs and
         write it next to the low poly (or to `out_path`)."""
         if self.high is None:
@@ -907,13 +907,14 @@ class CageEditor:
         out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png")
         self._bake_status(f"Baking AO {w}x{h} ({self._ao_samples} rays/texel)...")
         self.pl.render()
-        bake.bake_ao(
+        image = bake.bake_ao(
             self.low.points, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
             self.high.points, self._cached_high_tris, resolution=(w, h),
             samples=self._ao_samples, padding=self._padding, out_path=out,
-            progress=lambda m: print(f"[ao] {m}"),
+            progress=progress or (lambda m: print(f"[ao] {m}")),
+            should_cancel=should_cancel,
         )
-        self._bake_status(f"Baked AO -> {out}")
+        self._bake_status("AO cancelled." if image is None else f"Baked AO -> {out}")
         self.pl.render()
 
     def _bake_curvature(self, out_path: str | None = None) -> None:
@@ -927,7 +928,8 @@ class CageEditor:
         self._bake_status(f"Baked curvature -> {out}")
         self.pl.render()
 
-    def _bake(self, out_path: str | None = None, resolution=None) -> None:
+    def _bake(self, out_path: str | None = None, resolution=None,
+              progress=None, should_cancel=None) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using the
         current cage as the per-vertex ray bound, then show it lit on the shaded low poly
         (the cage stays visible). `out_path` overrides the default `<low>_normal.png`
@@ -955,10 +957,15 @@ class CageEditor:
             self.cage.points, self.high.points, high_tris,
             np.asarray(self.high.point_normals, dtype=np.float64),
             resolution=(w, h), out_path=out,
-            progress=lambda m: print(f"[bake] {m}"),
+            progress=progress or (lambda m: print(f"[bake] {m}")),
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
             supersample=self._supersample, padding=self._padding,
+            should_cancel=should_cancel,
         )
+        if image is None:
+            self._bake_status("Bake cancelled.")
+            self.pl.render()
+            return
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
         pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)

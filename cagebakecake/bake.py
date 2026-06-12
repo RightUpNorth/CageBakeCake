@@ -150,8 +150,12 @@ def bake(
     firing_normals: np.ndarray | None = None,
     supersample: int = 1,
     padding: int = 0,
-) -> np.ndarray:
+    should_cancel=None,
+) -> np.ndarray | None:
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
+
+    `should_cancel` is an optional predicate polled before the expensive ray cast; if it
+    returns true the bake aborts and returns None.
 
     `resolution` is the map size: an int for a square map, or a (width, height) pair
     for a non-square one.
@@ -225,6 +229,9 @@ def bake(
     origins = surf + direction * (offset[:, None] + eps)  # start at the cage, outside
     max_len = 2.0 * offset + 2.0 * eps  # sweep through the surface and equally inside
 
+    if should_cancel and should_cancel():
+        notify("cancelled")
+        return None
     notify(f"casting {len(origins)} rays into {high_tris.shape[0]} high-poly triangles")
     hit_normals, hit_mask = _cast_to_high(
         origins, -direction, max_len, high_points, high_tris, high_normals
@@ -324,8 +331,12 @@ def bake_ao(
     out_path: str | None = None,
     progress=None,
     padding: int = 0,
-) -> np.ndarray:
+    should_cancel=None,
+) -> np.ndarray | None:
     """Bake an ambient-occlusion map of the high poly onto the low poly's UVs.
+
+    `should_cancel` is polled before each hemisphere sample; if it returns true the bake
+    aborts and returns None (the per-sample loop is what makes AO interruptible).
 
     Per covered texel: fire `samples` cosine-weighted rays over the hemisphere around the
     shading normal and measure the fraction blocked by the high poly within `max_dist`
@@ -360,15 +371,22 @@ def bake_ao(
     import trimesh
     mesh = trimesh.Trimesh(vertices=np.asarray(high_points, dtype=np.float64),
                            faces=np.asarray(high_tris, dtype=np.int64), process=False)
+    samples = int(samples)
     notify(f"AO: {samples} rays x {len(origins)} texels into {len(high_tris)} triangles")
     occ = np.zeros(len(origins))
-    for lx, ly, lz in _hemisphere(int(samples)):
+    dirs_local = _hemisphere(samples)
+    for s in range(samples):
+        if should_cancel and should_cancel():
+            notify("cancelled")
+            return None
+        lx, ly, lz = dirs_local[s]
         d = tan * lx + bit * ly + nrm * lz
         loc, ray_idx, _tri = mesh.ray.intersects_location(
             ray_origins=origins, ray_directions=d, multiple_hits=False)
         if len(ray_idx):
             dist = np.linalg.norm(loc - origins[ray_idx], axis=1)
             np.add.at(occ, ray_idx[dist <= max_dist], 1.0)
+        notify(f"AO {s + 1}/{samples}")
     ao = 1.0 - occ / float(samples)
 
     gray = np.clip(ao * 255.0, 0, 255).astype(np.uint8)
