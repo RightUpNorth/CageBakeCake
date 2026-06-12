@@ -194,9 +194,23 @@ class MainWindow(QMainWindow):
         self._padding.currentTextChanged.connect(lambda t: self.editor.set_padding(int(t)))
         form.addRow("Edge padding", self._padding)
 
+        self._ao_samples = QComboBox()
+        for s in (16, 32, 64, 128, 256):
+            self._ao_samples.addItem(str(s))
+        self._ao_samples.currentTextChanged.connect(lambda t: self.editor.set_ao_samples(int(t)))
+        form.addRow("AO samples", self._ao_samples)
+
         bake_btn = QPushButton("Bake")
         bake_btn.clicked.connect(self._bake)
         form.addRow(bake_btn)
+
+        ao_btn = QPushButton("Bake AO")
+        ao_btn.clicked.connect(self._bake_ao)
+        form.addRow(ao_btn)
+
+        curv_btn = QPushButton("Bake Curvature")
+        curv_btn.clicked.connect(self._bake_curvature)
+        form.addRow(curv_btn)
 
         reset_cage_btn = QPushButton("Reset Cage")
         reset_cage_btn.clicked.connect(self._reset_cage)
@@ -260,7 +274,7 @@ class MainWindow(QMainWindow):
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
                    self._bake_w, self._bake_h, self._supersample, self._padding,
-                   self._name_match, self._mesh_list)
+                   self._ao_samples, self._name_match, self._mesh_list)
         for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
@@ -289,6 +303,7 @@ class MainWindow(QMainWindow):
         self._bake_h.setCurrentText(str(ed._bake_size[1]))
         self._supersample.setCurrentText(f"{ed._supersample}x")
         self._padding.setCurrentText(str(ed._padding))
+        self._ao_samples.setCurrentText(str(ed._ao_samples))
         self._name_match.setChecked(ed._name_match)
         self._mesh_list.clear()
         for group, idx, label, visible in ed.meshes():
@@ -347,6 +362,16 @@ class MainWindow(QMainWindow):
             w.setChecked(checked)
             w.blockSignals(False)
         self._set_status("Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
+
+    def _bake_ao(self) -> None:
+        self._set_status("Baking AO (this can take a while)...")
+        QApplication.processEvents()
+        self.editor._bake_ao()
+        self._set_status("AO baked (written next to the low poly).")
+
+    def _bake_curvature(self) -> None:
+        self.editor._bake_curvature()
+        self._set_status("Curvature baked (from the last normal-map bake).")
 
     def _open_low(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open Low Poly", "", _USD_FILTER)

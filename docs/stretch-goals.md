@@ -13,9 +13,11 @@ caveat. Check off as they land.
 
 ## Extra maps (headless)
 
-- [ ] **Ambient occlusion** - hemisphere rays from the low surface, fraction blocked by
-      the high poly.
-- [ ] **Curvature** - from the high-poly hit-normal variation across the surface.
+- [x] **Ambient occlusion** - `bake.bake_ao`: cosine-weighted hemisphere rays per texel,
+      fraction blocked by the high poly within `max_dist`. Dock "Bake AO" + "AO samples".
+- [x] **Curvature** - `bake.curvature_from_normal_map`: divergence of the tangent
+      normal's xy (convex bright, concave dark, flat neutral). Dock "Bake Curvature"
+      (uses the last normal-map bake).
 
 ## Cage / interaction
 

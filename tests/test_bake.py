@@ -115,6 +115,35 @@ def test_padding_bleeds_island_colour_into_background():
     assert pad[bg][0] > 150                          # filled with the reddish island colour
 
 
+def test_ao_darker_under_a_blocker():
+    # Low quad facing +Z; a small "ceiling" patch hovers over the centre. Centre texels
+    # should occlude (darker) more than the open corners.
+    lp, lt, ln, luv = _low_quad()
+    ceil_pts = np.array(
+        [[0.35, 0.35, 0.3], [0.65, 0.35, 0.3], [0.65, 0.65, 0.3], [0.35, 0.65, 0.3]],
+        dtype=np.float64,
+    )
+    ceil_tris = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int64)
+    img = bake.bake_ao(lp, lt, ln, luv, ceil_pts, ceil_tris, resolution=32,
+                       samples=32, max_dist=1.0)
+    centre = float(img[14:18, 14:18].mean())
+    corner = float(img[1:4, 1:4].mean())
+    assert corner > centre + 20, (corner, centre)
+    assert corner > 230  # open corner is near-white
+
+
+def test_curvature_flat_is_neutral_and_edges_show():
+    flat = np.tile(bake.FLAT_RGB, (16, 16, 1))
+    curv = bake.curvature_from_normal_map(flat)
+    assert np.all(curv == 128)  # flat normals -> neutral grey
+
+    stepped = np.tile(bake.FLAT_RGB, (16, 16, 1)).copy()
+    stepped[:, :8, 0] = 0      # nx = -1 on the left
+    stepped[:, 8:, 0] = 255    # nx = +1 on the right
+    curv2 = bake.curvature_from_normal_map(stepped)
+    assert not np.all(curv2 == 128)  # the step registers as curvature
+
+
 def test_no_uvs_raises():
     lp, lt, ln, _ = _low_quad()
     hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
