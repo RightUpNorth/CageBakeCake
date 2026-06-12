@@ -25,16 +25,15 @@ bakes with the current cage as the ray bound and previews the map on the low pol
 Verified end-to-end through `CageEditor` on the aligned `bin_lp` + `bin_hp_nolid` pair:
 709,759 / 710,117 covered texels hit (99.95%) at 1024x1024.
 
-Two follow-ups surfaced, both outside the bake itself:
+Two follow-ups surfaced, both outside the bake itself, both since **resolved**:
 
-- **Converter consistency.** The low and high must come from the *same* converter.
-  Blender's USD export bakes a 0.01 scale + a Y->Z up-axis into the prim transform,
-  while `tools/fbx_ascii_to_usd.py` writes raw points; mixing them misaligns the meshes
-  in `meshio`'s world space (the bake then misses everything). Reconciling the two is a
-  follow-up.
-- **Cage push is absolute.** The default `global_push=0.03` is in world units, so it is
-  too small or too large depending on asset scale; a scale-relative default belongs with
-  the displacement slider (Milestone 3).
+- **Converter consistency** (resolved). Blender's USD export bakes a 0.01 scale + a
+  Y->Z up-axis into the prim transform, while `tools/fbx_ascii_to_usd.py` writes raw
+  points; mixing them misaligned the meshes. `meshio._to_canonical_frame` now normalizes
+  every stage into a metres / Z-up frame, so a low and high from different converters line
+  up.
+- **Cage push is absolute** (resolved). The cage offset now defaults to 3% of the mesh
+  diagonal (scale-relative); `--push` still takes an absolute world-unit override.
 
 ## Exit criteria
 
