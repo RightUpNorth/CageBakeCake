@@ -148,11 +148,19 @@ def bake(
     out_path: str | None = None,
     progress=None,
     firing_normals: np.ndarray | None = None,
+    supersample: int = 1,
+    padding: int = 0,
 ) -> np.ndarray:
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
 
     `resolution` is the map size: an int for a square map, or a (width, height) pair
     for a non-square one.
+
+    `supersample` >= 1 bakes at that multiple of the size and box-averages the
+    tangent-space normals (renormalized) down to the target, to anti-alias edges.
+    `padding` >= 0 bleeds the baked colours that many texels past the UV-island edges
+    into the background, so mip-mapping does not pull the flat background across seams
+    (use a large value to flood-fill the whole background).
 
     `low_normals` is the low poly's shading normal - the frame the high-poly normal is
     encoded into (the normal the engine interpolates), and it must be the hard normals
@@ -182,13 +190,19 @@ def bake(
         width, height = int(resolution[0]), int(resolution[1])
     else:
         width = height = int(resolution)
-    notify(f"rasterizing {low_tris.shape[0]} triangles into {width}x{height}")
-    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, width, height)
-    image = np.tile(FLAT_RGB, (height, width, 1))
+    ss = max(1, int(supersample))
+    rw, rh = width * ss, height * ss  # render (possibly supersampled) resolution
+    msg = f"{rw}x{rh}" + (f" (->{width}x{height} x{ss})" if ss > 1 else "")
+    notify(f"rasterizing {low_tris.shape[0]} triangles into {msg}")
+    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, rw, rh)
+    image = np.tile(FLAT_RGB, (rh, rw, 1))
+    covered = np.zeros((rh, rw), dtype=bool)  # texels inside a UV island (for padding)
     if tri_index.size == 0:
+        image = _downsample(image, covered, ss, width, height)[0]
         if out_path:
             _write_png(out_path, image)
         return image
+    covered[yx[:, 0], yx[:, 1]] = True
 
     # Interpolate per-texel surface point, normals, and cage point. The shading normal
     # is the encode frame; the firing normal (skew-blended, M8.2) aims the rays.
@@ -230,10 +244,48 @@ def bake(
     image[hit_yx[:, 0], hit_yx[:, 1]] = rgb
     notify(f"{int(hit_mask.sum())}/{len(yx)} texels hit")
 
+    image, mask = _downsample(image, covered, ss, width, height)
+    if padding > 0:
+        image = _pad_islands(image, mask, int(padding))
+        notify(f"padded {int(padding)} texels past island edges")
     if out_path:
         _write_png(out_path, image)
         notify(f"wrote {out_path}")
     return image
+
+
+# --- supersample downsample + island padding (stretch: bake quality) --------
+def _downsample(image: np.ndarray, covered: np.ndarray, ss: int, width: int, height: int):
+    """Box-average an ss-supersampled buffer down to (height, width). Normals are
+    averaged as vectors over each block's *covered* subtexels and renormalized; blocks
+    with no coverage stay flat. Returns (image (H,W,3) uint8, covered (H,W) bool)."""
+    if ss == 1:
+        return image, covered
+    n = image.reshape(height, ss, width, ss, 3).astype(np.float64) / 255.0 * 2.0 - 1.0
+    c = covered.reshape(height, ss, width, ss).astype(np.float64)
+    wsum = c.sum(axis=(1, 3))                       # (H,W) covered subtexels per block
+    acc = (n * c[..., None]).sum(axis=(1, 3))       # (H,W,3) summed covered normals
+    out = np.tile(FLAT_RGB, (height, width, 1))
+    block_cov = wsum > 0
+    vecs = acc[block_cov] / wsum[block_cov][:, None]
+    vecs = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-12)
+    out[block_cov] = np.clip((vecs * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
+    return out, block_cov
+
+
+def _pad_islands(image: np.ndarray, mask: np.ndarray, padding: int) -> np.ndarray:
+    """Bleed filled (masked) colours into the background up to `padding` texels, using
+    each empty texel's nearest filled texel (edge padding for mip safety)."""
+    if not mask.any() or mask.all():
+        return image
+    from scipy import ndimage
+
+    empty = ~mask
+    dist, (iy, ix) = ndimage.distance_transform_edt(empty, return_indices=True)
+    fill = empty & (dist <= padding)
+    out = image.copy()
+    out[fill] = image[iy[fill], ix[fill]]
+    return out
 
 
 # --- cage-bounded ray casting (Phase 7.2) ----------------------------------

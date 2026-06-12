@@ -148,6 +148,8 @@ class CageEditor:
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
         self._bake_size = (BAKE_RESOLUTION, BAKE_RESOLUTION)  # (width, height); set by the dock
+        self._supersample = 1   # anti-alias multiple (bake at NxN, average down)
+        self._padding = 0       # UV-island edge padding in texels (0 = none)
         # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
         # links a low part and a high part that share a prim name (toggling one toggles both).
         self._part_vis: dict[tuple[str, int], bool] = {}
@@ -869,6 +871,14 @@ class CageEditor:
         """Set the baked normal-map size (the dock width/height dropdowns drive this)."""
         self._bake_size = (int(width), int(height))
 
+    def set_supersample(self, ss: int) -> None:
+        """Anti-alias multiple: bake at ss x the size and average down (dock dropdown)."""
+        self._supersample = max(1, int(ss))
+
+    def set_padding(self, px: int) -> None:
+        """UV-island edge padding in texels bled into the background (dock dropdown)."""
+        self._padding = max(0, int(px))
+
     def _bake(self, out_path: str | None = None, resolution=None) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using the
         current cage as the per-vertex ray bound, then show it lit on the shaded low poly
@@ -899,6 +909,7 @@ class CageEditor:
             resolution=(w, h), out_path=out,
             progress=lambda m: print(f"[bake] {m}"),
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
+            supersample=self._supersample, padding=self._padding,
         )
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
