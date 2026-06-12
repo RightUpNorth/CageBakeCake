@@ -535,6 +535,9 @@ class CageEditor:
             normal=n, c_res=48,
         )
         self._add_handle("giz_plane", disc, "lime", "tangent", opacity=0.5)
+        free = pv.Cube(center=anchor, x_length=self._axis_len * 0.18,
+                       y_length=self._axis_len * 0.18, z_length=self._axis_len * 0.18)
+        self._add_handle("giz_free", free, "deepskyblue", "free")  # drag in the view plane
         # Pick list so the handle picker only sees gizmo handles.
         self._handle_picker.InitializePickList()
         for a in self._giz.values():
@@ -627,6 +630,10 @@ class CageEditor:
         ray_o, ray_d = self._cursor_ray(x, y)
         if self.mode == "normal":
             target = cage.closest_point_on_axis(ray_o, ray_d, self._anchor, self.normals[i])
+        elif self.mode == "free":
+            # Free 3-axis: drag in the plane facing the camera through the anchor.
+            view = np.asarray(self.pl.camera.direction, dtype=np.float64)
+            target = cage.ray_plane_intersect(ray_o, ray_d, self._anchor, view)
         else:
             target = cage.ray_plane_intersect(ray_o, ray_d, self._anchor, self.normals[i])
         move = target - self._anchor
@@ -989,7 +996,7 @@ class CageEditor:
         soft_label = f"ON r={self.soft_radius:.2f}" if self.soft_enabled else "OFF"
         self.pl.add_text(
             "Left-click a vertex to select (click empty space / [d] to deselect).\n"
-            "Drag the RED arrow to displace (normal), the GREEN ring to slide.\n"
+            "Drag RED arrow = displace (normal), GREEN ring = slide, BLUE cube = free.\n"
             "[o] soft-select  [ [ / ] ] radius  [z] undo  [y] redo  [c] create-cage\n"
             "[x] reset point  [X] reset cage  [b] bake  [h] hide high\n"
             "[l] low shading  [L] high shading  [n] normal map  [v] LP normals\n"
