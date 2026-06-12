@@ -129,6 +129,51 @@ def soft_vertex_normals(points: np.ndarray, normals: np.ndarray) -> np.ndarray:
     return gnorm[group]
 
 
+def resample_cage(
+    low_points: np.ndarray,
+    low_normals: np.ndarray,
+    cage_points: np.ndarray,
+    cage_tris: np.ndarray,
+) -> np.ndarray:
+    """Resample an arbitrary (non-topology-matched) cage onto the low poly.
+
+    For each low vertex, fire a ray outward along its normal and take the first cage
+    intersection - that point becomes the topology-matched cage vertex, so the rest of
+    the editor (compose, gizmo, bake) works unchanged. Low vertices whose ray misses the
+    cage fall back to the nearest point on the cage surface. Returns (V,3).
+
+    This is what lets a cage that is not a vertex-for-vertex duplicate still drive the
+    tool (stretch goal: arbitrary cages).
+    """
+    import trimesh
+
+    low_points = np.asarray(low_points, dtype=np.float64)
+    dirs = np.asarray(low_normals, dtype=np.float64)
+    dirs = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
+    mesh = trimesh.Trimesh(vertices=np.asarray(cage_points, dtype=np.float64),
+                           faces=np.asarray(cage_tris, dtype=np.int64), process=False)
+
+    result = low_points.copy()
+    seen = np.zeros(len(low_points), dtype=bool)
+    locs, ray_idx, _tri = mesh.ray.intersects_location(
+        ray_origins=low_points, ray_directions=dirs, multiple_hits=True)
+    if len(ray_idx):
+        t = np.einsum("ij,ij->i", locs - low_points[ray_idx], dirs[ray_idx])
+        valid = t > 1e-9
+        rid, tv, lv = ray_idx[valid], t[valid], locs[valid]
+        for r, p in zip(rid[np.argsort(tv)], lv[np.argsort(tv)]):
+            if not seen[r]:  # first (nearest) outward hit wins
+                seen[r] = True
+                result[r] = p
+
+    miss = ~seen
+    if miss.any():  # rays that never met the cage: snap to the nearest cage vertex
+        cp = np.asarray(cage_points, dtype=np.float64)
+        d = low_points[miss][:, None, :] - cp[None, :, :]
+        result[miss] = cp[np.argmin(np.einsum("ijk,ijk->ij", d, d), axis=1)]
+    return result
+
+
 def blend_normals(
     hard_normals: np.ndarray, soft_normals: np.ndarray, skew
 ) -> np.ndarray:
