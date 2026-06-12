@@ -25,8 +25,11 @@ caveat. Check off as they land.
       vertex along its normal to the loaded cage (nearest cage vertex on a miss), turning
       a non-matching cage into an editable topology-matched base. The app uses it
       automatically when the cage vertex count differs from the low poly.
-- [ ] **Paintable skew** - per-region skew weight map instead of a single value.
-      `blend_normals` already takes a per-vertex skew; needs a paint UI (desktop check).
+- [x] **Paintable skew** - a per-vertex `skew_map` feeds `blend_normals`. The uniform
+      slider sets the whole map; `paint_skew_at` blends a brush value into vertices near a
+      point with a smooth falloff (reusing `soft_weights`). A "Paint skew" dock toggle +
+      "Brush skew" value make left-drag paint onto the mesh. Paint feel needs a desktop
+      check; the data layer is headless-verified.
 - [x] **Free 3-axis gizmo** - a blue cube handle drags the vertex in the camera-facing
       plane (reuses the tested `ray_plane_intersect` with the view direction), alongside
       the red normal arrow and green tangent ring. Drag feel needs a desktop check.
