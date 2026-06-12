@@ -181,6 +181,19 @@ class MainWindow(QMainWindow):
         form.addRow("Bake width", self._bake_w)
         form.addRow("Bake height", self._bake_h)
 
+        self._supersample = QComboBox()
+        for s in (1, 2, 4):
+            self._supersample.addItem(f"{s}x")
+        self._supersample.currentTextChanged.connect(
+            lambda t: self.editor.set_supersample(int(t.rstrip("x"))))
+        form.addRow("Supersample", self._supersample)
+
+        self._padding = QComboBox()
+        for p in (0, 2, 4, 8, 16, 32):
+            self._padding.addItem(str(p))
+        self._padding.currentTextChanged.connect(lambda t: self.editor.set_padding(int(t)))
+        form.addRow("Edge padding", self._padding)
+
         bake_btn = QPushButton("Bake")
         bake_btn.clicked.connect(self._bake)
         form.addRow(bake_btn)
@@ -246,7 +259,8 @@ class MainWindow(QMainWindow):
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
-                   self._bake_w, self._bake_h, self._name_match, self._mesh_list)
+                   self._bake_w, self._bake_h, self._supersample, self._padding,
+                   self._name_match, self._mesh_list)
         for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
@@ -273,6 +287,8 @@ class MainWindow(QMainWindow):
         self._cage_wire.setChecked(False)
         self._bake_w.setCurrentText(str(ed._bake_size[0]))
         self._bake_h.setCurrentText(str(ed._bake_size[1]))
+        self._supersample.setCurrentText(f"{ed._supersample}x")
+        self._padding.setCurrentText(str(ed._padding))
         self._name_match.setChecked(ed._name_match)
         self._mesh_list.clear()
         for group, idx, label, visible in ed.meshes():

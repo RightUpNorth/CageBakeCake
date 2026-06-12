@@ -89,6 +89,32 @@ def test_misses_stay_flat():
     assert np.all(img == bake.FLAT_RGB)
 
 
+def test_supersample_keeps_flat_and_size():
+    lp, lt, ln, luv = _low_quad()
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
+    img = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=32, supersample=2)
+    assert img.shape == (32, 32, 3)
+    interior = img[6:26, 6:26]
+    assert np.allclose(interior, bake.FLAT_RGB, atol=2), interior.reshape(-1, 3).mean(0)
+
+
+def test_padding_bleeds_island_colour_into_background():
+    # UV island in the lower-left quarter; the rest is background. A tilted high normal
+    # makes the island reddish so padding is detectable.
+    lp, lt, ln, _ = _low_quad()
+    uv = np.array([[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]], dtype=np.float64)
+    luv = uv[lt]
+    tilt = np.array([1.0, 0.0, 1.0]) / np.sqrt(2.0)
+    hp, ht, hn = _high_quad(tilt)
+    no = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=32, padding=0)
+    pad = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=32, padding=4)
+
+    bg = (20, 18)  # just right of the island edge (~col 16), within 4 texels
+    assert np.array_equal(no[bg], bake.FLAT_RGB)   # background is flat without padding
+    assert not np.array_equal(no[bg], pad[bg])      # padding changed it
+    assert pad[bg][0] > 150                          # filled with the reddish island colour
+
+
 def test_no_uvs_raises():
     lp, lt, ln, _ = _low_quad()
     hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
