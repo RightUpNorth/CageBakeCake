@@ -1,0 +1,127 @@
+# Feature-gap investigation
+
+An investigation into what a bake-cage authoring tool plausibly needs that
+CageBakeCake does not yet have, measured against how artists actually use cage +
+baking tools (Marmoset Toolbag, Substance 3D Painter/Designer bakers, xNormal,
+Handplane, Houdini/Dynamite). It is a survey, not a commitment - the roadmap decides
+what is in scope. Each item carries a rationale and a rough priority.
+
+Priority legend: **[core]** part of the central loop and arguably already expected;
+**[high]** strong value, common in peer tools; **[med]** useful, situational;
+**[low]** nice-to-have / polish.
+
+## A. Persistence and project state - the biggest structural gap
+
+Today **nothing survives closing the window**: cage edits, the skew map, slider
+values, undo history, and loaded paths are all in-memory only. The only thing written
+to disk is a baked PNG (and `[c]` create-cage, which copies the *source* low poly, not
+the edited cage).
+
+- **[core] Save / load the edited cage.** The tool's stated purpose is "authoring and
+  editing bake cages," but the edited cage cannot leave the app. Needs
+  `meshio.save_mesh` (USD writer) + a menu action. Without this the app is a baker,
+  not a cage *authoring* tool.
+- **[high] Save / load a project / session.** Paths + cage edits + skew map + bake
+  settings in one file, so a cage edit survives a restart and is resumable.
+- **[med] Recent files**, drag-and-drop to open, and remembered window/dock layout.
+- **[low] Persist undo history** (or at least warn on unsaved-edits quit).
+
+## B. Cage editing power
+
+Current editing is: one global push slider, per-vertex gizmo (normal / tangent / free),
+soft-select falloff, and paintable skew. Strong start; the gaps are the high-leverage
+brushes and selection tools artists expect.
+
+- **[high] Push / inflate brush.** Paint the cage offset directly onto the surface
+  (drag to inflate the region under the cursor) instead of per-vertex gizmo work. The
+  soft-weight + paint infrastructure for skew already exists and could back it.
+- **[high] Symmetry / mirror editing** (X/Y/Z). Cages are usually symmetric; editing
+  one side and mirroring is a major time saver.
+- **[med] Multi-vertex selection** (box / lasso / paint-select) so a region can be
+  pushed together without soft-select falloff.
+- **[med] Smooth / relax brush** for the cage, to remove the lumps local edits create.
+- **[low] Numeric entry** for a selected vertex's offset (precise nudge).
+
+## C. Baking - more map types and correctness feedback
+
+Current bakes: tangent-space normal, AO, curvature. Supersampling, edge padding, and a
+cancellable run already exist. Peer bakers ship a wider map set and, importantly, tell
+you when the bake went wrong.
+
+- **[high] Exploded bake / per-object cage offset.** When low and high have multiple
+  parts, neighbouring parts cross-project into each other. Offsetting parts apart for
+  the bake (or strict per-part name matching during ray casting - partially seeded by
+  the existing "name match") is the standard fix.
+- **[high] Ray-miss / projection feedback.** Highlight texels (or cage regions) where
+  rays hit nothing, or where the cage is too tight (poke-through) or too loose
+  (capturing the wrong surface). This is the single most useful bake-debugging aid and
+  ties directly to the point of a cage.
+- **[high] Additive / incremental re-bake (explicitly requested).** When a cage edit
+  only touches a small region, re-bake just the affected texels instead of the whole
+  map. The re-bake step is the hot part of the core loop, and a full bake to re-do one
+  corner is the main thing that makes iteration slow. Needs: track the dirty cage
+  region (the set of vertices whose `manual_delta` / skew changed since the last bake),
+  map it to the affected UV faces -> texel rectangle(s), re-cast only those texels, and
+  composite the result over the previous bake buffer (`_baked_image`). Falls back to a
+  full bake when no prior bake exists or the whole cage moved (e.g. the global offset
+  slider). Pairs naturally with the bitmap viewer (show which region was refreshed) and
+  with ray-miss feedback.
+- **[med] More maps:** object/world-space normal, height/displacement, thickness, bent
+  normal, position, material/color ID. Several reuse the existing ray cast.
+- **[med] Output options:** 16-bit / EXR, flip-green (DirectX vs OpenGL), channel
+  packing, sRGB vs linear control.
+- **[med] UDIM / multi-tile UV** support for assets that span more than one 0-1 tile.
+- **[low] Tangent-basis choice** (e.g. MikkTSpace) to match a target engine exactly.
+- **[low] Bake presets** (save a named bake configuration).
+
+## D. Inspection and feedback (the 2D side)
+
+The app is almost entirely a 3D viewport; there is little 2D feedback.
+
+- **[core] Bitmap viewer.** See the baked map in-app (normal / AO / curvature), switch
+  between them, zoom/pan, isolate channels. Today only the normal map previews (lit on
+  the 3D low poly); AO and curvature only write a file. Already flagged as the lead
+  build item in the design handoff.
+- **[high] UV layout view.** Show the low poly's UV islands (and overlay the bake / ray
+  coverage), so the artist can see seams, wasted space, and uncovered islands.
+- **[med] Before/after split or difference view** for comparing a bake to the high poly.
+
+## E. Import / format reach
+
+Runtime is USD-only; FBX/OBJ are converted offline via Blender.
+
+- **[med] Convert-on-load** for FBX/OBJ (shell out to the existing Blender converter
+  automatically) so artists are not blocked on a manual preprocess.
+- **[low] glTF/PLY/STL direct read** (VTK can read several of these already).
+
+## F. Performance and scale
+
+- **[med] Threaded bake.** The bake runs on the UI thread (kept responsive by pumping
+  events); a worker thread would keep the UI fully live and allow baking while editing.
+- **[low] Large-mesh viewport handling** (LOD / decimated display for very dense high
+  polys).
+
+## G. Workflow / automation
+
+- **[med] Batch / CLI bake** of many asset pairs without the GUI (the headless core
+  already supports it; needs a CLI surface beyond `--screenshot`).
+- **[low] Camera bookmarks / standard orthographic views**, isolation mode,
+  backface-culling toggle.
+
+## Summary - the short list
+
+If the goal is "a credible cage *authoring* + baking tool," the load-bearing gaps are:
+
+1. **Cage save/load** (A) - without it the tool cannot do its titular job end to end.
+2. **Bitmap viewer** (D) - see what you baked.
+3. **Ray-miss / projection feedback** (C) - know whether the cage is doing its job.
+4. **Push/inflate brush + symmetry** (B) - make cage editing fast, not vertex-by-vertex.
+5. **Exploded / per-part bake** (C) - correct multi-part bakes.
+
+Everything else is valuable but sits behind these five - with one explicitly-requested
+addition that rides alongside them:
+
+6. **Additive / incremental re-bake** (C) - re-bake only the region a cage edit
+   changed, so iterating on a cage does not pay for a full bake each pass. This is the
+   iteration-speed half of the loop and a priority feature, not a someday item.
+</content>
