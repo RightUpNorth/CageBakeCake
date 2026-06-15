@@ -28,6 +28,13 @@ import numpy as np
 
 FLAT_RGB = np.array([128, 128, 255], dtype=np.uint8)  # tangent-space (0,0,1)
 
+# Ray-miss / projection-feedback map colours: a covered texel is green where its ray
+# found the high poly and red where it missed (the cage failed to reach a surface);
+# uncovered background is dark grey. Partly-covered texels lerp green->red by miss frac.
+MISS_HIT = np.array([40, 160, 40], dtype=np.uint8)
+MISS_MISS = np.array([230, 50, 50], dtype=np.uint8)
+MISS_BG = np.array([28, 28, 30], dtype=np.uint8)
+
 
 # --- rasterization (Phase 7.1) ---------------------------------------------
 def _rasterize_uv_triangles(
@@ -151,7 +158,8 @@ def bake(
     supersample: int = 1,
     padding: int = 0,
     should_cancel=None,
-) -> np.ndarray | None:
+    return_miss: bool = False,
+) -> "np.ndarray | tuple[np.ndarray, np.ndarray] | None":
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
 
     `should_cancel` is an optional predicate polled before the expensive ray cast; if it
@@ -179,6 +187,11 @@ def bake(
     texel's tangent frame. Missed texels stay flat (128,128,255).
 
     Writes a PNG when out_path is given. Raises ValueError if the low poly has no UVs.
+
+    With `return_miss`, returns `(image, miss_map)` instead of just `image`: the miss map
+    is a ray-miss / projection-feedback image (green where a ray hit the high poly, red
+    where it missed, dark background) at the output resolution - it shows where the cage
+    failed to reach a surface. Cancelled bakes still return None.
     """
     low_uvs = np.asarray(low_uvs, dtype=np.float64)
     if low_uvs.size == 0 or low_uvs.shape != (low_tris.shape[0], 3, 2):
@@ -205,6 +218,8 @@ def bake(
         image = _downsample(image, covered, ss, width, height)[0]
         if out_path:
             _write_png(out_path, image)
+        if return_miss:
+            return image, np.tile(MISS_BG, (height, width, 1))  # nothing covered
         return image
     covered[yx[:, 0], yx[:, 1]] = True
 
@@ -258,7 +273,33 @@ def bake(
     if out_path:
         _write_png(out_path, image)
         notify(f"wrote {out_path}")
+    if return_miss:
+        miss = _miss_map(yx, hit_mask, covered, ss, width, height)
+        return image, miss
     return image
+
+
+# --- ray-miss / projection feedback ----------------------------------------
+def _miss_map(yx, hit_mask, covered, ss: int, width: int, height: int) -> np.ndarray:
+    """An (H,W,3) projection-feedback image: per output texel, green where every covered
+    subtexel's ray hit the high poly, red where they all missed, lerped between for a
+    partial block, and dark background where nothing was covered. `covered`/`hit` live at
+    render (supersampled) resolution; blocks are averaged down to (height, width)."""
+    rh, rw = covered.shape
+    hits = np.zeros((rh, rw), dtype=bool)
+    hy = yx[hit_mask]
+    hits[hy[:, 0], hy[:, 1]] = True
+    miss = covered & ~hits
+    cov_blocks = covered.reshape(height, ss, width, ss).sum(axis=(1, 3)).astype(np.float64)
+    miss_blocks = miss.reshape(height, ss, width, ss).sum(axis=(1, 3)).astype(np.float64)
+    out = np.tile(MISS_BG, (height, width, 1))
+    has = cov_blocks > 0
+    frac = np.zeros((height, width), dtype=np.float64)
+    frac[has] = miss_blocks[has] / cov_blocks[has]
+    col = (MISS_HIT.astype(np.float64)[None, None] * (1.0 - frac[..., None])
+           + MISS_MISS.astype(np.float64)[None, None] * frac[..., None])
+    out[has] = np.clip(col[has], 0, 255).astype(np.uint8)
+    return out
 
 
 # --- supersample downsample + island padding (stretch: bake quality) --------

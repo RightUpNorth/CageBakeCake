@@ -156,6 +156,7 @@ class CageEditor:
         self._baked_image: np.ndarray | None = None  # last tangent-space normal bake (H,W,3)
         self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
+        self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
         self._baked_uv: np.ndarray | None = None
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
@@ -1023,7 +1024,7 @@ class CageEditor:
         out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png")
         self._bake_status(f"Baking {w}x{h} (this can take a while)...")
         self.pl.render()
-        image = bake.bake(
+        result = bake.bake(
             self.low.points, low_tris, self.hard_normals, low_uvs,
             self.cage.points, self.high.points, high_tris,
             np.asarray(self.high.point_normals, dtype=np.float64),
@@ -1031,12 +1032,13 @@ class CageEditor:
             progress=progress or (lambda m: print(f"[bake] {m}")),
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
             supersample=self._supersample, padding=self._padding,
-            should_cancel=should_cancel,
+            should_cancel=should_cancel, return_miss=True,
         )
-        if image is None:
+        if result is None:
             self._bake_status("Bake cancelled.")
             self.pl.render()
             return
+        image, self._baked_miss = result  # miss map = ray-miss / projection feedback
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
         pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)
@@ -1065,6 +1067,8 @@ class CageEditor:
             maps.append(("AO", self._baked_ao))
         if self._baked_curv is not None:
             maps.append(("Curvature", self._baked_curv))
+        if self._baked_miss is not None:
+            maps.append(("Ray miss", self._baked_miss))
         return maps
 
     # --- lifecycle ----------------------------------------------------------
