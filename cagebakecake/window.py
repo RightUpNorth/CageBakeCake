@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 from pyvistaqt import QtInteractor
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
@@ -343,11 +344,22 @@ class MainWindow(QMainWindow):
         row_lay.setContentsMargins(0, 0, 0, 0)
         self._preview_pick = QComboBox()
         self._preview_pick.currentIndexChanged.connect(self._on_preview_pick)
+        # Channel isolation: view the full map or one channel as greyscale. Packed
+        # recipe outputs are RGBA, so each channel is independently inspectable.
+        self._iso = QComboBox()
+        self._iso.addItems(["RGB", "R", "G", "B", "A"])
+        self._iso.currentIndexChanged.connect(
+            lambda _i: self._show_preview(self._preview_pick.currentIndex()))
         fit_btn = QPushButton("Fit")
         fit_btn.clicked.connect(lambda: self._preview.fit())
+        export_btn = QPushButton("Export PNG")
+        export_btn.clicked.connect(self._export_preview)
         row_lay.addWidget(QLabel("Map"))
         row_lay.addWidget(self._preview_pick, 1)
+        row_lay.addWidget(QLabel("Isolate"))
+        row_lay.addWidget(self._iso)
         row_lay.addWidget(fit_btn)
+        row_lay.addWidget(export_btn)
         lay.addWidget(row)
 
         self._preview = ImageView()
@@ -355,6 +367,31 @@ class MainWindow(QMainWindow):
         self._preview_maps: list[tuple[str, object]] = []
         self._preview_panel = panel
         return panel
+
+    def _isolated(self, image: np.ndarray) -> np.ndarray:
+        """Apply the channel-isolation selection: the full RGB, or one channel shown
+        as greyscale. Isolating an absent alpha shows white (no alpha present)."""
+        sel = self._iso.currentText()
+        arr = np.asarray(image)
+        if sel == "RGB":
+            return arr
+        idx = {"R": 0, "G": 1, "B": 2, "A": 3}[sel]
+        if idx < arr.shape[2]:
+            gray = arr[..., idx]
+        else:
+            gray = np.full(arr.shape[:2], 255, np.uint8)
+        return np.repeat(gray[..., None], 3, axis=2)
+
+    def _export_preview(self) -> None:
+        """Save the currently-viewed map (with the active isolation) to a PNG."""
+        idx = self._preview_pick.currentIndex()
+        if not (0 <= idx < len(self._preview_maps)):
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", "", "PNG (*.png)")
+        if path:
+            import imageio.v3 as iio
+            iio.imwrite(path, self._isolated(self._preview_maps[idx][1]))
+            self._set_status(f"Wrote {path}")
 
     def _apply_viewport_mode(self) -> None:
         """Show the 2D pane, the 3D pane, or both per the Viewport dropdown; an equal
@@ -393,7 +430,7 @@ class MainWindow(QMainWindow):
 
     def _show_preview(self, idx: int) -> None:
         if 0 <= idx < len(self._preview_maps):
-            self._preview.set_image(self._preview_maps[idx][1])
+            self._preview.set_image(self._isolated(self._preview_maps[idx][1]))
 
     @staticmethod
     def _size_combo() -> QComboBox:
