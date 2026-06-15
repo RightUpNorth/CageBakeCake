@@ -25,12 +25,14 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from . import theme
 from .app import CageEditor
 from .imageview import ImageView
 
@@ -64,11 +66,16 @@ class MainWindow(QMainWindow):
         self.editor: CageEditor | None = None
         self._cancel = False  # set by the Cancel button, polled by the AO bake loop
 
+        # Theme axes (direction + mood) drive the 6-palette matrix; see theme.py.
+        self._direction = theme.DEFAULT_DIRECTION
+        self._mood = theme.DEFAULT_MOOD
+
         self._build_menu()
         self._build_toolbar()
         self._build_dock()
         self._build_central()
         self._rebuild()
+        self._apply_theme()
 
     # --- construction -------------------------------------------------------
     def _build_toolbar(self) -> None:
@@ -81,6 +88,20 @@ class MainWindow(QMainWindow):
         self._viewport_mode.setCurrentText("3D + 2D")
         self._viewport_mode.currentTextChanged.connect(lambda _t: self._apply_viewport_mode())
         bar.addWidget(self._viewport_mode)
+
+        # Theme axes, right-aligned (the design floats these in the title bar; the
+        # native title bar is OS-drawn, so they live on the toolbar just beneath it).
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        bar.addWidget(spacer)
+        self._direction_pick = QComboBox()
+        self._direction_pick.addItems(["Patisserie", "Chocolatier"])  # A, B
+        self._direction_pick.currentIndexChanged.connect(self._on_direction)
+        bar.addWidget(self._direction_pick)
+        self._mood_pick = QComboBox()
+        self._mood_pick.addItems(["Light", "Neutral", "Dark"])
+        self._mood_pick.currentIndexChanged.connect(self._on_mood)
+        bar.addWidget(self._mood_pick)
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
@@ -367,6 +388,7 @@ class MainWindow(QMainWindow):
             plotter=self._interactor,
         )
         self.editor.attach_interaction()
+        self.editor.set_theme(theme.palette_key(self._direction, self._mood))
         self._sync_dock()
         self._refresh_preview()
         self._apply_viewport_mode()
@@ -426,6 +448,25 @@ class MainWindow(QMainWindow):
             self._mesh_list.addItem(item)
         for w in widgets:
             w.blockSignals(False)
+
+    # --- theming ------------------------------------------------------------
+    def _on_direction(self, idx: int) -> None:
+        self._direction = theme.DIRECTIONS[idx]
+        self._apply_theme()
+
+    def _on_mood(self, idx: int) -> None:
+        self._mood = theme.MOODS[idx]
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Re-skin the whole window (QSS) and recolor the viewport for the current
+        direction/mood. Pure presentation - no editor state changes."""
+        key = theme.palette_key(self._direction, self._mood)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.build_qss(key))
+        if self.editor is not None:
+            self.editor.set_theme(key)
 
     # --- dock callbacks -----------------------------------------------------
     def _on_offset(self, step: int) -> None:
@@ -548,6 +589,7 @@ def launch(
 ) -> None:
     """Open the Qt application window and run the event loop until the user quits."""
     app = QApplication.instance() or QApplication([])
+    theme.load_fonts()
     win = MainWindow(low_path, high_path, cage_path, hdr_path, global_push)
     win.show()
     app.exec()

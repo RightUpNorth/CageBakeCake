@@ -29,7 +29,7 @@ import numpy as np
 import pyvista as pv
 import vtk
 
-from . import bake, cage, meshio
+from . import bake, cage, meshio, theme
 
 BAKE_RESOLUTION = 1024
 
@@ -182,6 +182,8 @@ class CageEditor:
         self._name_match = False
         self._low_actors: dict = {}
         self._high_actors: dict = {}
+        # Active theme palette key (e.g. "A-light"); drives the cage/sky viewport colors.
+        self._theme_key = theme.palette_key(theme.DEFAULT_DIRECTION, theme.DEFAULT_MOOD)
 
         # The render surface. Default is a standalone pyvista Plotter (also the headless
         # screenshot path); the Qt front end injects a pyvistaqt.QtInteractor instead, which
@@ -211,20 +213,23 @@ class CageEditor:
         # code path for the initial build and later toggles.
         self._apply_high_style()
         self._apply_low_style()
+        # Cage actors take their colors from the active theme palette (the cage is the
+        # editable star of the view); set_theme_colors recolors them live.
+        c = theme.viewport_colors(self._theme_key)
         self.cage_actor = self.pl.add_mesh(
-            self.cage, color="cyan", opacity=0.35, name="cage", show_edges=False
+            self.cage, color=c["cage"], opacity=0.35, name="cage", show_edges=False
         )
-        cage_pts = self.pl.add_mesh(
-            self.cage, style="points", color="orange", point_size=12,
+        self._cage_pts_actor = self.pl.add_mesh(
+            self.cage, style="points", color=c["cage_points"], point_size=12,
             render_points_as_spheres=True, name="cage_pts",
         )
         # Draw the points in front of the coincident cage surface the same way the gizmo
         # handles do, so they are not buried in the depth fight with it.
-        cage_pts.mapper.SetResolveCoincidentTopologyToPolygonOffset()
-        cage_wire = self.pl.add_mesh(
-            self.cage, style="wireframe", color="cyan", line_width=1, name="cage_wire"
+        self._cage_pts_actor.mapper.SetResolveCoincidentTopologyToPolygonOffset()
+        self._cage_wire_actor = self.pl.add_mesh(
+            self.cage, style="wireframe", color=c["cage_wire"], line_width=1, name="cage_wire"
         )
-        cage_wire.SetVisibility(False)  # off by default; the translucent surface reads cleaner
+        self._cage_wire_actor.SetVisibility(False)  # off by default; the translucent surface reads cleaner
         hover_sphere = pv.Sphere(radius=self._handle_radius * 0.6)
         self._hover_actor = self.pl.add_mesh(hover_sphere, color="white", name="hover_highlight")
         self._hover_actor.SetVisibility(False)
@@ -233,7 +238,19 @@ class CageEditor:
         self._hover_picker.AddPickList(self.cage_actor)
         self._hover_picker.PickFromListOn()
         self.pl.add_axes()
-        self.pl.set_background("slategray")
+        self.pl.set_background(c["sky_bottom"], top=c["sky_top"])
+
+    def set_theme(self, key: str) -> None:
+        """Recolor the viewport to the given palette key (the cage surface/points/
+        wireframe and the sky gradient). The math and meshes are untouched - this is
+        pure presentation, matching the panel's live re-theming."""
+        self._theme_key = key
+        c = theme.viewport_colors(key)
+        self.cage_actor.prop.color = c["cage"]
+        self._cage_pts_actor.prop.color = c["cage_points"]
+        self._cage_wire_actor.prop.color = c["cage_wire"]
+        self.pl.set_background(c["sky_bottom"], top=c["sky_top"])
+        self.pl.render()
 
     # --- display modes (low / high material, normal map, cage, normals) -----
     def _remove_actors(self, actors: dict) -> None:
