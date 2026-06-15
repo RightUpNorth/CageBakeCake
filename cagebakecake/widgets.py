@@ -8,8 +8,10 @@ window stays a thin assembly layer.
 
 from __future__ import annotations
 
-from qtpy.QtCore import Qt
+from qtpy.QtCore import QSize, Qt
+from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -27,6 +29,44 @@ from qtpy.QtWidgets import (
 )
 
 from . import recipe, theme
+
+
+class ToggleSwitch(QCheckBox):
+    """A pill switch matching the design's toggles. Subclasses QCheckBox so it keeps
+    the full checkbox API (toggled, setChecked, ...) and just paints a 36x20 track with
+    a sliding 16px knob plus the label. Colors come from the active palette, so it
+    recolors with the theme on the next repaint."""
+
+    _TRACK_W = 36
+    _TRACK_H = 20
+    _KNOB = 16
+
+    def sizeHint(self) -> QSize:
+        base = super().sizeHint()
+        return QSize(base.width() + self._TRACK_W + 6, max(base.height(), self._TRACK_H + 2))
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)  # whole row toggles, like the design
+
+    def paintEvent(self, _event) -> None:
+        p = theme.active()
+        on = self.isChecked()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        y = (self.height() - self._TRACK_H) // 2
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(p["accent"] if on else p["inset"]))
+        painter.drawRoundedRect(0, y, self._TRACK_W, self._TRACK_H,
+                                self._TRACK_H / 2, self._TRACK_H / 2)
+        painter.setBrush(QColor("#ffffff"))
+        knob_x = (self._TRACK_W - self._KNOB - 2) if on else 2
+        painter.drawEllipse(knob_x, y + 2, self._KNOB, self._KNOB)
+
+        painter.setPen(QColor(p["ink"]))
+        text_x = self._TRACK_W + 8
+        painter.drawText(text_x, 0, self.width() - text_x, self.height(),
+                         Qt.AlignVCenter | Qt.AlignLeft, self.text())
 
 _BADGE = {"matched": "matched", "no match": "nomatch", "manual": "manual"}
 

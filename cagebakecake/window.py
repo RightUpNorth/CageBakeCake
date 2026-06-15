@@ -39,7 +39,7 @@ from qtpy.QtWidgets import (
 from . import theme
 from .app import CageEditor
 from .imageview import ImageView
-from .widgets import CollapsibleSection, NameMatchTable, RecipePanel
+from .widgets import CollapsibleSection, NameMatchTable, RecipePanel, ToggleSwitch
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -174,7 +174,7 @@ class MainWindow(QMainWindow):
         self._skew_label = QLabel("-")
         f.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
 
-        self._soft = QCheckBox("Soft select (proportional)")
+        self._soft = ToggleSwitch("Soft select (proportional)")
         self._soft.toggled.connect(self._on_soft)
         f.addRow(self._soft)
 
@@ -184,7 +184,7 @@ class MainWindow(QMainWindow):
         self._radius_label = QLabel("-")
         f.addRow("Soft radius", self._labeled(self._radius, self._radius_label))
 
-        self._paint_skew = QCheckBox("Paint skew (left-drag, brush = soft radius)")
+        self._paint_skew = ToggleSwitch("Paint skew (left-drag, brush = soft radius)")
         self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
         f.addRow(self._paint_skew)
 
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
         # --- C2 Name match ----------------------------------------------------
         nm_sec = CollapsibleSection("Name match")
         f = nm_sec.form()
-        self._name_match = QCheckBox("Link low/high parts by prim name")
+        self._name_match = ToggleSwitch("Link low/high parts by prim name")
         self._name_match.toggled.connect(self._on_name_match)
         f.addRow(self._name_match)
         self._name_table = NameMatchTable(lambda: self.editor, on_hover=self._on_pair_hover)
@@ -542,11 +542,13 @@ class MainWindow(QMainWindow):
         """Re-skin the whole window (QSS) and recolor the viewport for the current
         direction/mood. Pure presentation - no editor state changes."""
         key = theme.palette_key(self._direction, self._mood)
+        theme.set_active(key)  # so custom-painted toggles read the live palette
         app = QApplication.instance()
         if app is not None:
             app.setStyleSheet(theme.build_qss(key))
         if self.editor is not None:
             self.editor.set_theme(key)
+        self.update()  # repaint the custom toggle switches for the new palette
 
     # --- dock callbacks -----------------------------------------------------
     def _on_offset(self, step: int) -> None:
