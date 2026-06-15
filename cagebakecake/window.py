@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Open Low Poly...", self._open_low)
         file_menu.addAction("Open High Poly...", self._open_high)
         file_menu.addSeparator()
+        file_menu.addAction("Save Cage As...", self._save_cage)
         file_menu.addAction("Export Normal Map...", self._export)
         file_menu.addSeparator()
         file_menu.addAction("Quit", self.close)
@@ -421,6 +422,13 @@ class MainWindow(QMainWindow):
         if path:
             self._high_path = path
             self._rebuild()
+
+    def _save_cage(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save Cage As", "", _USD_FILTER)
+        if not path:
+            return
+        out = self.editor.save_cage(path)
+        self._set_status(f"Saved cage -> {out}")
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Normal Map", "", "PNG (*.png)")
