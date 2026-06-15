@@ -187,5 +187,4 @@ python -m cagebakecake <low.usdc> --screenshot out.png   # headless render and e
 ```
 
 Use the project `.venv` interpreter (`.venv\Scripts\python.exe`).
-</content>
 </invoke>

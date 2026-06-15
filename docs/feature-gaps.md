@@ -17,10 +17,10 @@ values, undo history, and loaded paths are all in-memory only. The only thing wr
 to disk is a baked PNG (and `[c]` create-cage, which copies the *source* low poly, not
 the edited cage).
 
-- **[core] Save / load the edited cage.** The tool's stated purpose is "authoring and
-  editing bake cages," but the edited cage cannot leave the app. Needs
-  `meshio.save_mesh` (USD writer) + a menu action. Without this the app is a baker,
-  not a cage *authoring* tool.
+- **[core] Save / load the edited cage. (DONE)** `meshio.save_mesh` writes the authored
+  cage to USD in the canonical frame and `CageEditor.save_cage` / File > Save Cage As...
+  expose it; loading a cage already existed (`--cage` / resample). The app is now a cage
+  *authoring* tool end to end, not just a baker.
 - **[high] Save / load a project / session.** Paths + cage edits + skew map + bake
   settings in one file, so a cage edit survives a restart and is resumable.
 - **[med] Recent files**, drag-and-drop to open, and remembered window/dock layout.
@@ -78,10 +78,10 @@ you when the bake went wrong.
 
 The app is almost entirely a 3D viewport; there is little 2D feedback.
 
-- **[core] Bitmap viewer.** See the baked map in-app (normal / AO / curvature), switch
-  between them, zoom/pan, isolate channels. Today only the normal map previews (lit on
-  the 3D low poly); AO and curvature only write a file. Already flagged as the lead
-  build item in the design handoff.
+- **[core] Bitmap viewer. (DONE)** A "Bake preview" dock (`imageview.ImageView`) shows
+  the last baked map with a Normal / AO / Curvature dropdown and wheel-zoom / drag-pan;
+  `CageEditor.baked_maps()` keeps all three in memory and the dock refreshes after each
+  bake. Channel isolation is not yet implemented (possible follow-up).
 - **[high] UV layout view.** Show the low poly's UV islands (and overlay the bake / ray
   coverage), so the artist can see seams, wasted space, and uncovered islands.
 - **[med] Before/after split or difference view** for comparing a bake to the high poly.
@@ -124,4 +124,3 @@ addition that rides alongside them:
 6. **Additive / incremental re-bake** (C) - re-bake only the region a cage edit
    changed, so iterating on a cage does not pay for a full bake each pass. This is the
    iteration-speed half of the loop and a priority feature, not a someday item.
-</content>

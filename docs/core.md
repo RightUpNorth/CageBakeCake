@@ -89,4 +89,3 @@ core-loop accelerator, not a nice-to-have. (feature-gaps.md item C)
    peer-tool breadth (ID, thickness, position, exploded bake)?
 3. **Single-asset or batch?** Is GUI single-asset work the whole story, or is headless
    batch baking a first-class use case?
-</content>
