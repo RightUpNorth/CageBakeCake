@@ -153,7 +153,9 @@ class CageEditor:
         self._low_wire_on = False   # wireframe (edge) overlay on the shaded low poly
         self._high_wire_on = False  # wireframe (edge) overlay on the shaded high poly
         self._normal_map_on = False
-        self._baked_image: np.ndarray | None = None
+        self._baked_image: np.ndarray | None = None  # last tangent-space normal bake (H,W,3)
+        self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
+        self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
         self._baked_uv: np.ndarray | None = None
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
@@ -979,6 +981,8 @@ class CageEditor:
             progress=progress or (lambda m: print(f"[ao] {m}")),
             should_cancel=should_cancel,
         )
+        if image is not None:
+            self._baked_ao = image
         self._bake_status("AO cancelled." if image is None else f"Baked AO -> {out}")
         self.pl.render()
 
@@ -989,7 +993,9 @@ class CageEditor:
             self.pl.render()
             return
         out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_curv.png")
-        bake._write_png(out, bake.curvature_from_normal_map(self._baked_image))
+        curv = bake.curvature_from_normal_map(self._baked_image)
+        bake._write_png(out, curv)
+        self._baked_curv = curv
         self._bake_status(f"Baked curvature -> {out}")
         self.pl.render()
 
@@ -1048,6 +1054,18 @@ class CageEditor:
         self.pl.add_text(
             msg, position="lower_right", font_size=9, color="yellow", name="bake_status"
         )
+
+    def baked_maps(self) -> list[tuple[str, np.ndarray]]:
+        """The baked maps currently in memory, as (name, RGB image) - feeds the 2D bake
+        preview. Empty until something is baked; cleared when a new mesh is loaded."""
+        maps = []
+        if self._baked_image is not None:
+            maps.append(("Normal", self._baked_image))
+        if self._baked_ao is not None:
+            maps.append(("AO", self._baked_ao))
+        if self._baked_curv is not None:
+            maps.append(("Curvature", self._baked_curv))
+        return maps
 
     # --- lifecycle ----------------------------------------------------------
     def _update_help(self) -> None:

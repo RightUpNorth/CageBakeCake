@@ -26,10 +26,12 @@ from qtpy.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSlider,
+    QVBoxLayout,
     QWidget,
 )
 
 from .app import CageEditor
+from .imageview import ImageView
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -63,6 +65,7 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_dock()
+        self._build_preview_dock()
         self._rebuild()
 
     # --- construction -------------------------------------------------------
@@ -243,6 +246,59 @@ class MainWindow(QMainWindow):
         dock.setWidget(panel)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
+    def _build_preview_dock(self) -> None:
+        """A 2D viewer for the baked maps (normal / AO / curvature). Sits in the bottom
+        dock area; the map dropdown only lists maps that have actually been baked."""
+        dock = QDockWidget("Bake preview", self)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(2, 2, 2, 2)
+
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        self._preview_pick = QComboBox()
+        self._preview_pick.currentIndexChanged.connect(self._on_preview_pick)
+        fit_btn = QPushButton("Fit")
+        fit_btn.clicked.connect(lambda: self._preview.fit())
+        row_lay.addWidget(QLabel("Map"))
+        row_lay.addWidget(self._preview_pick, 1)
+        row_lay.addWidget(fit_btn)
+        lay.addWidget(row)
+
+        self._preview = ImageView()
+        lay.addWidget(self._preview, 1)
+        self._preview_maps: list[tuple[str, object]] = []
+
+        dock.setWidget(panel)
+        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+
+    def _refresh_preview(self) -> None:
+        """Repopulate the map dropdown from the editor's in-memory bakes and show the
+        current selection (defaulting to the newest map). Called after each bake."""
+        self._preview_maps = self.editor.baked_maps()
+        keep = self._preview_pick.currentText()
+        self._preview_pick.blockSignals(True)
+        self._preview_pick.clear()
+        self._preview_pick.addItems([name for name, _img in self._preview_maps])
+        self._preview_pick.blockSignals(False)
+        if not self._preview_maps:
+            self._preview.clear()
+            return
+        names = [name for name, _img in self._preview_maps]
+        # Keep the user's current pick if it still exists, else show the last-baked map.
+        idx = names.index(keep) if keep in names else len(names) - 1
+        self._preview_pick.setCurrentIndex(idx)
+        self._show_preview(idx)
+
+    def _on_preview_pick(self, idx: int) -> None:
+        self._show_preview(idx)
+
+    def _show_preview(self, idx: int) -> None:
+        if 0 <= idx < len(self._preview_maps):
+            self._preview.set_image(self._preview_maps[idx][1])
+
     @staticmethod
     def _size_combo() -> QComboBox:
         box = QComboBox()
@@ -278,6 +334,7 @@ class MainWindow(QMainWindow):
         )
         self.editor.attach_interaction()
         self._sync_dock()
+        self._refresh_preview()
         self._interactor.reset_camera()
         self.setWindowTitle(f"CageBakeCake - {self._low_path}")
 
@@ -398,6 +455,7 @@ class MainWindow(QMainWindow):
             w.blockSignals(False)
         self._set_status("Bake cancelled." if self._cancel
                          else "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
+        self._refresh_preview()
 
     def _bake_ao(self) -> None:
         self._cancel = False
@@ -405,10 +463,12 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         self.editor._bake_ao(progress=self._progress, should_cancel=lambda: self._cancel)
         self._set_status("AO cancelled." if self._cancel else "AO baked (next to the low poly).")
+        self._refresh_preview()
 
     def _bake_curvature(self) -> None:
         self.editor._bake_curvature()
         self._set_status("Curvature baked (from the last normal-map bake).")
+        self._refresh_preview()
 
     def _open_low(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open Low Poly", "", _USD_FILTER)
