@@ -11,8 +11,20 @@ from __future__ import annotations
 
 import numpy as np
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QImage, QPainter, QPixmap
+from qtpy.QtGui import QBrush, QColor, QImage, QPainter, QPixmap
 from qtpy.QtWidgets import QGraphicsScene, QGraphicsView
+
+
+def _checkerboard(size: int = 16) -> QBrush:
+    """A soft two-grey checkerboard tile, so transparent/empty texels read as the
+    classic texture-viewer background rather than a flat fill."""
+    pm = QPixmap(size * 2, size * 2)
+    pm.fill(QColor("#cfcfcf"))
+    painter = QPainter(pm)
+    painter.fillRect(0, 0, size, size, QColor("#bcbcbc"))
+    painter.fillRect(size, size, size, size, QColor("#bcbcbc"))
+    painter.end()
+    return QBrush(pm)
 
 
 def numpy_to_qpixmap(image: np.ndarray) -> QPixmap:
@@ -38,7 +50,7 @@ class ImageView(QGraphicsView):
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setRenderHints(QPainter.SmoothPixmapTransform)
-        self.setBackgroundBrush(Qt.darkGray)
+        self.setBackgroundBrush(_checkerboard())
         self._needs_fit = True
 
     def set_image(self, image: np.ndarray) -> None:

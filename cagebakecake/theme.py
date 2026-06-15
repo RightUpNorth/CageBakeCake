@@ -152,6 +152,21 @@ def palette_key(direction: str, mood: str) -> str:
     return f"{direction}-{mood}"
 
 
+# The palette currently applied to the window, so custom-painted widgets (the pill
+# toggle switch) can read accent/inset/ink without each holding a copy. window.py
+# calls set_active() whenever the theme changes.
+_active_key = palette_key(DEFAULT_DIRECTION, DEFAULT_MOOD)
+
+
+def set_active(key: str) -> None:
+    global _active_key
+    _active_key = key
+
+
+def active() -> dict:
+    return PALETTES[_active_key]
+
+
 def channel_count(kind: str) -> int:
     """3 for normal/position (RGB), 1 for the grey maps."""
     return 3 if kind in RGB_KINDS else 1
@@ -312,13 +327,24 @@ QComboBox {{
     color: {ink};
     border: 1px solid {border2};
     border-radius: 8px;
-    padding: 4px 8px;
+    padding: 5px 8px;
 }}
 QComboBox:hover {{ border-color: {accent}; }}
+QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox::down-arrow {{
+    image: none;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {inksoft};
+    margin-right: 7px;
+}}
 QComboBox QAbstractItemView {{
     background: {panel};
     color: {ink};
     border: 1px solid {border};
+    border-radius: 8px;
+    padding: 4px;
     selection-background-color: {inset};
     selection-color: {ink};
     outline: none;
