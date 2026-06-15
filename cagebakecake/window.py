@@ -32,6 +32,7 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,7 +40,15 @@ from qtpy.QtWidgets import (
 from . import theme
 from .app import CageEditor
 from .imageview import ImageView
-from .widgets import CollapsibleSection, NameMatchTable, RecipePanel, ToggleSwitch
+from .widgets import (
+    CollapsibleSection,
+    NameMatchTable,
+    RecipePanel,
+    SegmentedControl,
+    ToggleSwitch,
+    channel_chip,
+    eyebrow_chip,
+)
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -79,34 +88,60 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_dock()
         self._build_central()
+        self._build_statusbar()
         self._rebuild()
         self._apply_theme()
 
     # --- construction -------------------------------------------------------
     def _build_toolbar(self) -> None:
-        """A top toolbar holding the viewport-layout dropdown (3D / 3D + 2D / 2D)."""
-        bar = self.addToolBar("View")
+        """The design's title bar, recreated as a themed top toolbar (the OS title bar is
+        native): app mark + title + asset name on the left; the Direction/Mood segmented
+        toggles, the viewport-mode dropdown, and three window dots on the right."""
+        bar = self.addToolBar("Title")
+        bar.setObjectName("titlebar")
         bar.setMovable(False)
-        bar.addWidget(QLabel("Viewport "))
+
+        mark = QLabel()
+        mark.setObjectName("appmark")
+        mark.setFixedSize(22, 22)
+        title = QLabel("CageBakeCake")
+        title.setObjectName("apptitle")
+        self._asset_label = QLabel("")
+        self._asset_label.setObjectName("assetname")
+        bar.addWidget(mark)
+        bar.addWidget(title)
+        bar.addWidget(self._asset_label)
+
+        spacer = QWidget()
+        spacer.setStyleSheet("background: transparent;")
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        bar.addWidget(spacer)
+
         self._viewport_mode = QComboBox()
         self._viewport_mode.addItems(["3D", "3D + 2D", "2D"])
         self._viewport_mode.setCurrentText("3D + 2D")
         self._viewport_mode.currentTextChanged.connect(lambda _t: self._apply_viewport_mode())
         bar.addWidget(self._viewport_mode)
 
-        # Theme axes, right-aligned (the design floats these in the title bar; the
-        # native title bar is OS-drawn, so they live on the toolbar just beneath it).
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        bar.addWidget(spacer)
-        self._direction_pick = QComboBox()
-        self._direction_pick.addItems(["Patisserie", "Chocolatier"])  # A, B
-        self._direction_pick.currentIndexChanged.connect(self._on_direction)
+        theme_label = QLabel("THEME")
+        theme_label.setObjectName("themelabel")
+        bar.addWidget(theme_label)
+        self._direction_pick = SegmentedControl(["Patisserie", "Chocolatier"])  # A, B
+        self._direction_pick.changed.connect(self._on_direction)
         bar.addWidget(self._direction_pick)
-        self._mood_pick = QComboBox()
-        self._mood_pick.addItems(["Light", "Neutral", "Dark"])
-        self._mood_pick.currentIndexChanged.connect(self._on_mood)
+        self._mood_pick = SegmentedControl(["Light", "Neutral", "Dark"])
+        self._mood_pick.changed.connect(self._on_mood)
         bar.addWidget(self._mood_pick)
+
+        dots = QWidget()
+        dlay = QHBoxLayout(dots)
+        dlay.setContentsMargins(8, 0, 0, 0)
+        dlay.setSpacing(5)
+        for i in range(3):
+            d = QLabel()
+            d.setProperty("dot", "on" if i == 2 else "off")
+            dlay.addWidget(d)
+        bar.addWidget(dots)
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
@@ -135,6 +170,29 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Reset Cage", self._reset_cage)
         view_menu.addAction("Reset Selected Point", self._reset_point)
+
+        cage_menu = bar.addMenu("&Cage")
+        cage_menu.addAction("Reset Cage", self._reset_cage)
+        cage_menu.addAction("Reset Selected Point", self._reset_point)
+        cage_menu.addSeparator()
+        cage_menu.addAction("Save Cage As...", self._save_cage)
+
+        bake_menu = bar.addMenu("&Bake")
+        bake_menu.addAction("Bake recipe", self._bake_recipe)
+        bake_menu.addSeparator()
+        bake_menu.addAction("Bake normal map", self._bake)
+        bake_menu.addAction("Bake AO", self._bake_ao)
+        bake_menu.addAction("Bake curvature", self._bake_curvature)
+        bake_menu.addAction("Cancel bake", self._cancel_bake)
+
+        help_menu = bar.addMenu("&Help")
+        help_menu.addAction("Keyboard shortcuts", lambda: self._set_status(
+            "B bake recipe  ·  O soft-select  ·  Z undo  ·  see docs/ for the full list"))
+
+        # The faint caption the design floats at the right of the menu bar.
+        caption = QLabel("USD · PySide6 · headless math  ")
+        caption.setObjectName("caption")
+        bar.setCornerWidget(caption, Qt.TopRightCorner)
 
     def _build_dock(self) -> None:
         """The controls dock, grouped into the design's sections (Shape the Cage /
@@ -251,7 +309,8 @@ class MainWindow(QMainWindow):
         # --- C3 Recipe --------------------------------------------------------
         rec_sec = CollapsibleSection("Recipe")
         f = rec_sec.form()
-        # Bake settings (the design's "Global" card).
+        # Bake settings (the design's numbered "1 BAKE SETTINGS" / Global card).
+        f.addRow(eyebrow_chip("1", "BAKE SETTINGS", "accent2"))
         self._bake_w = self._size_combo()
         self._bake_h = self._size_combo()
         self._bake_w.currentTextChanged.connect(self._on_bake_size)
@@ -298,24 +357,55 @@ class MainWindow(QMainWindow):
         footer.setObjectName("footer")
         flay = QVBoxLayout(footer)
         flay.setContentsMargins(12, 10, 12, 10)
-        self._bake_recipe_btn = QPushButton("Bake recipe")
+
+        # Primary "Bake recipe": a two-line label (title + subtitle) and a B kbd hint,
+        # laid out inside the button (child labels pass clicks through to the button).
+        self._bake_recipe_btn = QPushButton()
         self._bake_recipe_btn.setObjectName("primary")
         self._bake_recipe_btn.clicked.connect(self._bake_recipe)
+        bl = QHBoxLayout(self._bake_recipe_btn)
+        bl.setContentsMargins(14, 10, 14, 10)
+        bl.setSpacing(10)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        ptitle = QLabel("Bake recipe")
+        ptitle.setObjectName("primarytitle")
+        self._bake_sub = QLabel("")
+        self._bake_sub.setObjectName("primarysub")
+        text_col.addWidget(ptitle)
+        text_col.addWidget(self._bake_sub)
+        bl.addLayout(text_col)
+        bl.addStretch(1)
+        kbd = QLabel("B")
+        kbd.setObjectName("kbd")
+        bl.addWidget(kbd)
+        for lbl in (ptitle, self._bake_sub, kbd):
+            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
         flay.addWidget(self._bake_recipe_btn)
 
+        # Secondary link row: Export Cage / Export Maps, spacer, Reset cage.
         links = QHBoxLayout()
-        for text, slot in (("Cancel", self._cancel_bake),
-                           ("Reset cage", self._reset_cage),
-                           ("Reset point", self._reset_point)):
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            links.addWidget(b)
+        links.setContentsMargins(0, 2, 0, 0)
+        export_cage = QPushButton("Export Cage")
+        export_cage.setObjectName("linkAccent")
+        export_cage.clicked.connect(self._save_cage)
+        export_maps = QPushButton("Export Maps")
+        export_maps.setObjectName("linkSoft")
+        export_maps.clicked.connect(self._export)
+        reset_cage = QPushButton("Reset cage")
+        reset_cage.setObjectName("linkFaint")
+        reset_cage.clicked.connect(self._reset_cage)
+        links.addWidget(export_cage)
+        links.addWidget(export_maps)
+        links.addStretch(1)
+        links.addWidget(reset_cage)
         links_w = QWidget()
         links_w.setLayout(links)
         flay.addWidget(links_w)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
+        self._status.setObjectName("resolved")
         flay.addWidget(self._status)
         outer.addWidget(footer)
 
@@ -324,12 +414,12 @@ class MainWindow(QMainWindow):
         self._on_recipe_change(self._recipe_panel.recipe())  # seed the button subtitle
 
     def _build_central(self) -> None:
-        """The central area is a horizontal splitter: the 2D bake preview on the left,
-        the 3D viewport on the right (inserted in _rebuild). The Viewport dropdown shows
-        either pane or both; when both show they split equally."""
-        self._splitter = QSplitter(Qt.Horizontal)
-        self._splitter.addWidget(self._build_preview_panel())  # index 0 = 2D (left)
-        # index 1 = the QtInteractor, added/replaced in _rebuild.
+        """The central area is a vertical splitter matching the design: the 3D viewport
+        fills the top, the 2D Baked Maps tray sits below it. The viewport (QtInteractor)
+        is inserted at the top in _rebuild; the Viewport dropdown toggles each pane."""
+        self._splitter = QSplitter(Qt.Vertical)
+        self._splitter.addWidget(self._build_preview_panel())  # the bottom tray for now
+        # The QtInteractor is inserted at index 0 (top) in _rebuild.
         self.setCentralWidget(self._splitter)
 
     def _build_preview_panel(self) -> QWidget:
@@ -403,9 +493,11 @@ class MainWindow(QMainWindow):
         if self._interactor is not None:
             self._interactor.setVisible(show_3d)
         if show_2d and show_3d:
-            # Equal magnitudes => 50/50, scaled to whatever the splitter's width is
-            # (robust even before the window is shown and sized).
-            self._splitter.setSizes([1_000_000, 1_000_000])
+            # Viewport dominant on top, the Baked Maps tray a shorter strip below it
+            # (~3:1), matching the design's layout.
+            self._splitter.setSizes([3_000_000, 1_000_000])
+        if hasattr(self, "_status_view"):
+            self._refresh_status_meta()
 
     def _refresh_preview(self) -> None:
         """Repopulate the map dropdown from the editor's in-memory bakes and show the
@@ -456,7 +548,7 @@ class MainWindow(QMainWindow):
         if old is not None:
             old.setParent(None)
             old.close()
-        self._splitter.insertWidget(1, self._interactor)  # right pane = 3D viewport
+        self._splitter.insertWidget(0, self._interactor)  # top pane = 3D viewport
 
         self.editor = CageEditor(
             self._low_path,
@@ -473,6 +565,8 @@ class MainWindow(QMainWindow):
         self._apply_viewport_mode()
         self._interactor.reset_camera()
         self.setWindowTitle(f"CageBakeCake - {self._low_path}")
+        self._asset_label.setText(f"- {os.path.basename(self._low_path)}")
+        self._refresh_status_meta()
 
     def _sync_dock(self) -> None:
         """Push the editor's current ranges/values into the dock widgets without
@@ -528,6 +622,7 @@ class MainWindow(QMainWindow):
         for w in widgets:
             w.blockSignals(False)
         self._name_table.rebuild()  # repopulate name-match rows for the loaded parts
+        self._on_recipe_change(self._recipe_panel.recipe())  # subtitle reflects real bake size
 
     # --- theming ------------------------------------------------------------
     def _on_direction(self, idx: int) -> None:
@@ -548,6 +643,8 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(theme.build_qss(key))
         if self.editor is not None:
             self.editor.set_theme(key)
+        if hasattr(self, "_status_right"):
+            self._refresh_status_meta()
         self.update()  # repaint the custom toggle switches for the new palette
 
     # --- dock callbacks -----------------------------------------------------
@@ -633,10 +730,11 @@ class MainWindow(QMainWindow):
         return os.path.splitext(os.path.basename(self._low_path))[0]
 
     def _on_recipe_change(self, rec) -> None:
-        """Reflect the recipe's map/output counts on the primary button (the design's
-        '<n> maps -> <n> textures' subtitle)."""
-        self._bake_recipe_btn.setText(
-            f"Bake recipe  ({len(rec.bake_maps)} maps -> {len(rec.outputs)} textures)")
+        """Reflect the recipe's map/output counts on the primary button subtitle (the
+        design's '<n> maps -> <n> textures' line)."""
+        w = self._bake_w.currentText() if hasattr(self, "_bake_w") else "2048"
+        self._bake_sub.setText(
+            f"{len(rec.bake_maps)} maps -> {len(rec.outputs)} textures · {w}px")
 
     def _bake_recipe(self) -> None:
         """Bake the current recipe: every map it needs, packed into its output PNGs
@@ -701,9 +799,46 @@ class MainWindow(QMainWindow):
         self.editor._bake(out_path=path)
         self._set_status(f"Wrote {path}")
 
+    def _build_statusbar(self) -> None:
+        """The design's status bar: a recipe-status dot + text, the cage vert count, and
+        the current view on the left; the active theme mood label on the right."""
+        sb = self.statusBar()
+        sb.setSizeGripEnabled(False)
+        self._status_dot = QLabel()
+        self._status_dot.setObjectName("statusdot")
+        self._status_main = QLabel("Ready")
+        self._status_main.setObjectName("statusseg")
+        self._status_verts = QLabel("")
+        self._status_verts.setObjectName("statusseg")
+        self._status_view = QLabel("")
+        self._status_view.setObjectName("statusseg")
+        for w in (self._status_dot, self._status_main, _sep(), self._status_verts,
+                  _sep(), self._status_view):
+            sb.addWidget(w)
+        self._status_right = QLabel("")
+        self._status_right.setObjectName("statusright")
+        sb.addPermanentWidget(self._status_right)
+
+    def _refresh_status_meta(self) -> None:
+        """Update the non-message status segments (vert count, view, theme label)."""
+        if self.editor is not None:
+            verts = len(self.editor.cage.points)
+            self._status_verts.setText(f"{verts:,} cage verts")
+        self._status_view.setText(f"{self._viewport_mode.currentText()} view")
+        direction = "Patisserie" if self._direction == "A" else "Chocolatier"
+        self._status_right.setText(f"{direction} · {self._mood.capitalize()}")
+
     def _set_status(self, msg: str) -> None:
         self._status.setText(msg)
+        if hasattr(self, "_status_main"):
+            self._status_main.setText(msg)
         self.statusBar().showMessage(msg)
+
+
+def _sep() -> QLabel:
+    lbl = QLabel("·")
+    lbl.setObjectName("statusseg")
+    return lbl
 
 
 def launch(

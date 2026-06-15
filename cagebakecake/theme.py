@@ -273,6 +273,22 @@ QFrame#card {{
     border: 1px solid {border};
     border-radius: 9px;
 }}
+
+/* Numbered eyebrow chips (1 BAKE SETTINGS / 2 PACKING). */
+QLabel#numAccent {{ background: {accent}; color: {accent-ink}; border-radius: 5px;
+    font-size: 9px; font-weight: 700; }}
+QLabel#numAccent2 {{ background: {accent2}; color: {accent-ink}; border-radius: 5px;
+    font-size: 9px; font-weight: 700; }}
+
+/* Bake-map kind pill. */
+QLabel#kindpill {{ background: {inset}; color: {inksoft}; border-radius: 7px;
+    padding: 2px 8px; font-size: 9px; font-weight: 600; }}
+
+/* Packing channel cells. */
+QFrame#cell {{ background: {panel}; border: 1px solid {border2}; border-radius: 8px; }}
+QFrame#cell:hover {{ border-color: {accent}; }}
+QToolButton#cellbtn {{ background: transparent; border: none; color: {ink};
+    text-align: left; padding: 2px 2px; font-size: 11px; }}
 QToolButton {{
     background: {inset};
     color: {ink};
@@ -282,6 +298,48 @@ QToolButton {{
 }}
 QToolButton:hover {{ border-color: {accent}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
+
+/* Title strip (the design's title bar, recreated as the top toolbar). */
+QToolBar#titlebar {{ background: {titlebar}; border: none; padding: 4px 12px; spacing: 8px; }}
+QLabel#appmark {{ background: {accent}; border-radius: 6px; }}
+QLabel#apptitle {{ color: {titletext}; font-family: "Bricolage Grotesque","Segoe UI",sans-serif;
+    font-weight: 700; font-size: 15px; }}
+QLabel#assetname {{ color: {inksoft}; font-size: 12px; }}
+QLabel#themelabel {{ color: {inksoft}; font-size: 9px; font-weight: 700; }}
+QLabel#caption {{ color: {inkfaint}; font-size: 10px; }}
+
+/* Segmented control (Direction / Mood). */
+QWidget#segmented {{ background: {inset}; border-radius: 9px; }}
+QToolButton#segment {{ background: transparent; border: none; border-radius: 7px;
+    padding: 4px 11px; color: {inksoft}; font-size: 11px; font-weight: 600; }}
+QToolButton#segment:hover {{ color: {ink}; }}
+QToolButton#segment:checked {{ background: {accent}; color: {accent-ink}; }}
+
+/* Three faux window dots. */
+QLabel[dot="off"] {{ background: {border2}; border-radius: 6px; min-width: 11px; max-width: 11px;
+    min-height: 11px; max-height: 11px; }}
+QLabel[dot="on"] {{ background: {accent}; border-radius: 6px; min-width: 11px; max-width: 11px;
+    min-height: 11px; max-height: 11px; }}
+
+/* Status bar: a colored status dot + segments. */
+QLabel#statusdot {{ background: {good}; border-radius: 4px; min-width: 8px; max-width: 8px;
+    min-height: 8px; max-height: 8px; }}
+QLabel#statusseg {{ color: {inksoft}; font-size: 11px; }}
+QLabel#statusright {{ color: {inksoft}; font-size: 11px; }}
+
+/* Primary "Bake recipe" button — two-line label + a kbd hint. */
+QPushButton#primary {{ text-align: left; padding: 12px 14px; }}
+QLabel#primarytitle {{ color: {accent-ink}; font-family: "Bricolage Grotesque","Segoe UI",sans-serif;
+    font-weight: 700; font-size: 15px; background: transparent; }}
+QLabel#primarysub {{ color: {accent-ink}; font-size: 10px; background: transparent; }}
+QLabel#kbd {{ color: {accent-ink}; border: 1px solid {accent-ink}; border-radius: 5px;
+    padding: 1px 6px; font-size: 10px; font-weight: 700; background: transparent; }}
+
+/* Secondary footer links. */
+QPushButton#linkAccent {{ background: transparent; border: none; color: {accent}; font-weight: 600;
+    padding: 4px 2px; }}
+QPushButton#linkSoft {{ background: transparent; border: none; color: {inksoft}; padding: 4px 2px; }}
+QPushButton#linkFaint {{ background: transparent; border: none; color: {inkfaint}; padding: 4px 2px; }}
 
 QFrame#nmRow {{ border-top: 1px solid {border}; }}
 QFrame#nmRow:hover {{ background: {inset}; }}
