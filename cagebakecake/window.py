@@ -430,40 +430,84 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._splitter)
 
     def _build_preview_panel(self) -> QWidget:
-        """The 2D bake-map viewer panel: a Map dropdown + Fit over a zoom/pan image view.
-        The dropdown only lists maps that have actually been baked."""
+        """The Baked Maps tray (the design's Region B): a header (title + size + Hide),
+        quick tabs (Normal / AO / Curvature), the zoom/pan image view, and a footer
+        (full map dropdown, channel isolate, zoom, Export PNG)."""
         panel = QWidget()
+        panel.setObjectName("tray")
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
 
-        row = QWidget()
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(0, 0, 0, 0)
+        header = QHBoxLayout()
+        ttl = QLabel("Baked Maps")
+        ttl.setObjectName("trayTitle")
+        self._tray_size = QLabel("no bake yet")
+        self._tray_size.setObjectName("traySize")
+        hide = QPushButton("Hide")
+        hide.setObjectName("linkSoft")
+        hide.clicked.connect(lambda: self._viewport_mode.setCurrentText("3D"))
+        header.addWidget(ttl)
+        header.addWidget(self._tray_size)
+        header.addStretch(1)
+        header.addWidget(hide)
+        lay.addLayout(header)
+
+        # Quick tabs for the three core maps (pills); the full list is the footer dropdown.
+        tabs = QHBoxLayout()
+        tabs.setSpacing(6)
+        self._tray_tabs = []
+        for name in ("Normal", "AO", "Curvature"):
+            b = QPushButton(name)
+            b.setObjectName("tab")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _c=False, n=name: self._select_map_by_name(n))
+            tabs.addWidget(b)
+            self._tray_tabs.append(b)
+        tabs.addStretch(1)
+        lay.addLayout(tabs)
+
+        self._preview = ImageView()
+        lay.addWidget(self._preview, 1)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
         self._preview_pick = QComboBox()
         self._preview_pick.currentIndexChanged.connect(self._on_preview_pick)
-        # Channel isolation: view the full map or one channel as greyscale. Packed
-        # recipe outputs are RGBA, so each channel is independently inspectable.
         self._iso = QComboBox()
         self._iso.addItems(["RGB", "R", "G", "B", "A"])
         self._iso.currentIndexChanged.connect(
             lambda _i: self._show_preview(self._preview_pick.currentIndex()))
+        zoom_out = QPushButton("-")
+        zoom_out.clicked.connect(lambda: self._preview.scale(0.8, 0.8))
         fit_btn = QPushButton("Fit")
         fit_btn.clicked.connect(lambda: self._preview.fit())
+        zoom_in = QPushButton("+")
+        zoom_in.clicked.connect(lambda: self._preview.scale(1.25, 1.25))
         export_btn = QPushButton("Export PNG")
+        export_btn.setObjectName("linkAccent")
         export_btn.clicked.connect(self._export_preview)
-        row_lay.addWidget(QLabel("Map"))
-        row_lay.addWidget(self._preview_pick, 1)
-        row_lay.addWidget(QLabel("Isolate"))
-        row_lay.addWidget(self._iso)
-        row_lay.addWidget(fit_btn)
-        row_lay.addWidget(export_btn)
-        lay.addWidget(row)
+        footer.addWidget(QLabel("Map"))
+        footer.addWidget(self._preview_pick, 1)
+        footer.addWidget(QLabel("Isolate"))
+        footer.addWidget(self._iso)
+        footer.addWidget(zoom_out)
+        footer.addWidget(fit_btn)
+        footer.addWidget(zoom_in)
+        footer.addWidget(export_btn)
+        lay.addLayout(footer)
 
-        self._preview = ImageView()
-        lay.addWidget(self._preview, 1)
         self._preview_maps: list[tuple[str, object]] = []
         self._preview_panel = panel
         return panel
+
+    def _select_map_by_name(self, name: str) -> None:
+        """Tray tab: show the named map if it has been baked."""
+        names = [n for n, _img in self._preview_maps]
+        for tab in self._tray_tabs:
+            tab.setChecked(tab.text() == name)
+        if name in names:
+            self._preview_pick.setCurrentIndex(names.index(name))
 
     def _isolated(self, image: np.ndarray) -> np.ndarray:
         """Apply the channel-isolation selection: the full RGB, or one channel shown
@@ -515,6 +559,10 @@ class MainWindow(QMainWindow):
         self._preview_pick.clear()
         self._preview_pick.addItems([name for name, _img in self._preview_maps])
         self._preview_pick.blockSignals(False)
+        w, h = self.editor._bake_size
+        ss = self.editor._supersample
+        self._tray_size.setText(
+            f"{w} x {h} · {ss}x SS" if self._preview_maps else "no bake yet")
         if not self._preview_maps:
             self._preview.clear()
             return

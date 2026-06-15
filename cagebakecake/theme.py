@@ -271,6 +271,16 @@ QLabel#fieldval {{ color: {inksoft}; font-size: 12px; font-weight: 600; }}
 
 QWidget#footer {{ background: {panel2}; border-top: 1px solid {border}; }}
 
+/* Baked Maps tray (Region B). */
+QWidget#tray {{ background: {panel2}; border-top: 1px solid {border}; }}
+QLabel#trayTitle {{ color: {ink}; font-family: "Bricolage Grotesque","Segoe UI",sans-serif;
+    font-weight: 700; font-size: 13px; }}
+QLabel#traySize {{ color: {inksoft}; font-size: 11px; }}
+QPushButton#tab {{ background: {inset}; color: {inksoft}; border: none; border-radius: 11px;
+    padding: 4px 14px; font-size: 11px; font-weight: 600; }}
+QPushButton#tab:hover {{ color: {ink}; }}
+QPushButton#tab:checked {{ background: {accent}; color: {accent-ink}; }}
+
 QFrame#card {{
     background: {panel2};
     border: 1px solid {border};
