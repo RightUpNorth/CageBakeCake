@@ -26,6 +26,7 @@ from qtpy.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSlider,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -64,11 +65,23 @@ class MainWindow(QMainWindow):
         self._cancel = False  # set by the Cancel button, polled by the AO bake loop
 
         self._build_menu()
+        self._build_toolbar()
         self._build_dock()
-        self._build_preview_dock()
+        self._build_central()
         self._rebuild()
 
     # --- construction -------------------------------------------------------
+    def _build_toolbar(self) -> None:
+        """A top toolbar holding the viewport-layout dropdown (3D / 3D + 2D / 2D)."""
+        bar = self.addToolBar("View")
+        bar.setMovable(False)
+        bar.addWidget(QLabel("Viewport "))
+        self._viewport_mode = QComboBox()
+        self._viewport_mode.addItems(["3D", "3D + 2D", "2D"])
+        self._viewport_mode.setCurrentText("3D + 2D")
+        self._viewport_mode.currentTextChanged.connect(lambda _t: self._apply_viewport_mode())
+        bar.addWidget(self._viewport_mode)
+
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
@@ -246,11 +259,18 @@ class MainWindow(QMainWindow):
         dock.setWidget(panel)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
-    def _build_preview_dock(self) -> None:
-        """A 2D viewer for the baked maps (normal / AO / curvature). Sits in the bottom
-        dock area; the map dropdown only lists maps that have actually been baked."""
-        dock = QDockWidget("Bake preview", self)
-        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+    def _build_central(self) -> None:
+        """The central area is a horizontal splitter: the 2D bake preview on the left,
+        the 3D viewport on the right (inserted in _rebuild). The Viewport dropdown shows
+        either pane or both; when both show they split equally."""
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.addWidget(self._build_preview_panel())  # index 0 = 2D (left)
+        # index 1 = the QtInteractor, added/replaced in _rebuild.
+        self.setCentralWidget(self._splitter)
+
+    def _build_preview_panel(self) -> QWidget:
+        """The 2D bake-map viewer panel: a Map dropdown + Fit over a zoom/pan image view.
+        The dropdown only lists maps that have actually been baked."""
         panel = QWidget()
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(2, 2, 2, 2)
@@ -270,9 +290,22 @@ class MainWindow(QMainWindow):
         self._preview = ImageView()
         lay.addWidget(self._preview, 1)
         self._preview_maps: list[tuple[str, object]] = []
+        self._preview_panel = panel
+        return panel
 
-        dock.setWidget(panel)
-        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+    def _apply_viewport_mode(self) -> None:
+        """Show the 2D pane, the 3D pane, or both per the Viewport dropdown; an equal
+        split when both are visible."""
+        mode = self._viewport_mode.currentText()
+        show_2d = mode in ("2D", "3D + 2D")
+        show_3d = mode in ("3D", "3D + 2D")
+        self._preview_panel.setVisible(show_2d)
+        if self._interactor is not None:
+            self._interactor.setVisible(show_3d)
+        if show_2d and show_3d:
+            # Equal magnitudes => 50/50, scaled to whatever the splitter's width is
+            # (robust even before the window is shown and sized).
+            self._splitter.setSizes([1_000_000, 1_000_000])
 
     def _refresh_preview(self) -> None:
         """Repopulate the map dropdown from the editor's in-memory bakes and show the
@@ -320,9 +353,10 @@ class MainWindow(QMainWindow):
         dock. Called on startup and whenever File > Open changes a mesh."""
         old = self._interactor
         self._interactor = QtInteractor(self)
-        self.setCentralWidget(self._interactor)
         if old is not None:
+            old.setParent(None)
             old.close()
+        self._splitter.insertWidget(1, self._interactor)  # right pane = 3D viewport
 
         self.editor = CageEditor(
             self._low_path,
@@ -335,6 +369,7 @@ class MainWindow(QMainWindow):
         self.editor.attach_interaction()
         self._sync_dock()
         self._refresh_preview()
+        self._apply_viewport_mode()
         self._interactor.reset_camera()
         self.setWindowTitle(f"CageBakeCake - {self._low_path}")
 
