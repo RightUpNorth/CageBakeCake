@@ -223,5 +223,7 @@ assets/fbx/
 assets/obj/
 assets/usd/
 
-# Baked normal maps written by the Bake button (derived artifacts).
+# Baked maps written by the Bake buttons (derived artifacts).
 *_normal.png
+*_ao.png
+*_curv.png
