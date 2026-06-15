@@ -52,10 +52,12 @@ you when the bake went wrong.
   parts, neighbouring parts cross-project into each other. Offsetting parts apart for
   the bake (or strict per-part name matching during ray casting - partially seeded by
   the existing "name match") is the standard fix.
-- **[high] Ray-miss / projection feedback.** Highlight texels (or cage regions) where
-  rays hit nothing, or where the cage is too tight (poke-through) or too loose
-  (capturing the wrong surface). This is the single most useful bake-debugging aid and
-  ties directly to the point of a cage.
+- **[high] Ray-miss / projection feedback. (PARTLY DONE)** The normal bake now also
+  produces a "Ray miss" map (`bake.bake(..., return_miss=True)` -> `_miss_map`): green
+  where a ray hit the high poly, red where it missed (the cage failed to reach a
+  surface), shown in the bitmap viewer's Map dropdown. Still open: distinguishing
+  too-tight (poke-through) from too-loose (wrong surface) misses, and a 3D in-viewport
+  overlay of the missed regions on the low poly.
 - **[high] Additive / incremental re-bake (explicitly requested).** When a cage edit
   only touches a small region, re-bake just the affected texels instead of the whole
   map. The re-bake step is the hot part of the core loop, and a full bake to re-do one
@@ -115,6 +117,7 @@ If the goal is "a credible cage *authoring* + baking tool," the load-bearing gap
 1. **Cage save/load** (A) - without it the tool cannot do its titular job end to end.
 2. **Bitmap viewer** (D) - see what you baked.
 3. **Ray-miss / projection feedback** (C) - know whether the cage is doing its job.
+   (Core "Ray miss" map done; tight-vs-loose split and 3D overlay still open.)
 4. **Push/inflate brush + symmetry** (B) - make cage editing fast, not vertex-by-vertex.
 5. **Exploded / per-part bake** (C) - correct multi-part bakes.
 

@@ -160,6 +160,30 @@ def test_ao_cancel_returns_none():
     assert out is None
 
 
+def test_ray_miss_map_hits_are_green():
+    # Flat high poly spanning past the unit square -> every covered texel's ray hits ->
+    # the miss map interior reads green (hit), not red.
+    lp, lt, ln, luv = _low_quad()
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
+    img, miss = bake.bake(lp, lt, ln, luv, _cage(lp), hp, ht, hn, resolution=32,
+                          return_miss=True)
+    assert miss.shape == (32, 32, 3)
+    interior = miss[8:24, 8:24].reshape(-1, 3)
+    assert interior[:, 1].mean() > interior[:, 0].mean()  # green dominates over red
+
+
+def test_ray_miss_map_marks_misses_red():
+    # Cage too thin to reach the high poly -> every ray misses -> the miss map reads red.
+    lp, lt, ln, luv = _low_quad()
+    hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
+    thin = _cage(lp, offset=0.1)
+    img, miss = bake.bake(lp, lt, ln, luv, thin, hp, ht, hn, resolution=16,
+                          return_miss=True)
+    assert np.all(img == bake.FLAT_RGB)  # nothing baked
+    interior = miss[4:12, 4:12].reshape(-1, 3)
+    assert interior[:, 0].mean() > interior[:, 1].mean()  # red dominates over green
+
+
 def test_no_uvs_raises():
     lp, lt, ln, _ = _low_quad()
     hp, ht, hn = _high_quad([0.0, 0.0, 1.0])
