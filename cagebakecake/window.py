@@ -220,37 +220,40 @@ class MainWindow(QMainWindow):
         # --- C1 Shape the Cage ------------------------------------------------
         cage_sec = CollapsibleSection("Shape the Cage")
         f = cage_sec.form()
+        f.addRow(_helper("The cage is the mold around your asset. Offset presses it out "
+                         "from the surface; fix poke-through locally with the gizmo."))
         self._offset = QSlider(Qt.Horizontal)
         self._offset.setRange(0, _SLIDER_STEPS)
         self._offset.valueChanged.connect(self._on_offset)
         self._offset_label = QLabel("-")
-        f.addRow("Cage offset", self._labeled(self._offset, self._offset_label))
+        f.addRow(_slider_field("Cage offset", self._offset, self._offset_label))
 
         self._skew = QSlider(Qt.Horizontal)
+        self._skew.setObjectName("amberSlider")  # the design fills Skew with accent2
         self._skew.setRange(0, _SLIDER_STEPS)
         self._skew.valueChanged.connect(self._on_skew)
         self._skew_label = QLabel("-")
-        f.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
+        f.addRow(_slider_field("Skew (hard - soft)", self._skew, self._skew_label))
 
-        self._soft = ToggleSwitch("Soft select (proportional)")
+        self._soft = ToggleSwitch("")
         self._soft.toggled.connect(self._on_soft)
-        f.addRow(self._soft)
+        f.addRow(_toggle_row("Soft select (proportional)", self._soft))
 
         self._radius = QSlider(Qt.Horizontal)
         self._radius.setRange(1, _SLIDER_STEPS)
         self._radius.valueChanged.connect(self._on_radius)
         self._radius_label = QLabel("-")
-        f.addRow("Soft radius", self._labeled(self._radius, self._radius_label))
+        f.addRow(_slider_field("Soft radius", self._radius, self._radius_label))
 
-        self._paint_skew = ToggleSwitch("Paint skew (left-drag, brush = soft radius)")
+        self._paint_skew = ToggleSwitch("")
         self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
-        f.addRow(self._paint_skew)
+        f.addRow(_toggle_row("Paint skew (left-drag)", self._paint_skew))
 
         self._paint_value = QSlider(Qt.Horizontal)
         self._paint_value.setRange(0, _SLIDER_STEPS)
         self._paint_value.valueChanged.connect(self._on_paint_value)
         self._paint_value_label = QLabel("-")
-        f.addRow("Brush skew", self._labeled(self._paint_value, self._paint_value_label))
+        f.addRow(_slider_field("Brush skew", self._paint_value, self._paint_value_label))
         sections.addWidget(cage_sec)
 
         # --- Display (interim home; the design moves these to the viewport HUD) ---
@@ -299,9 +302,11 @@ class MainWindow(QMainWindow):
         # --- C2 Name match ----------------------------------------------------
         nm_sec = CollapsibleSection("Name match")
         f = nm_sec.form()
-        self._name_match = ToggleSwitch("Link low/high parts by prim name")
+        self._name_match = ToggleSwitch("")
         self._name_match.toggled.connect(self._on_name_match)
-        f.addRow(self._name_match)
+        f.addRow(_toggle_row("Link low/high parts by prim name", self._name_match))
+        f.addRow(_helper("Edit a name to fix a pair; hover a row to highlight that "
+                         "part in the viewport."))
         self._name_table = NameMatchTable(lambda: self.editor, on_hover=self._on_pair_hover)
         f.addRow(self._name_table)
         sections.addWidget(nm_sec)
@@ -309,6 +314,8 @@ class MainWindow(QMainWindow):
         # --- C3 Recipe --------------------------------------------------------
         rec_sec = CollapsibleSection("Recipe")
         f = rec_sec.form()
+        f.addRow(_helper("First choose what to bake, then pack those maps into exported "
+                         ".png files. Everything here saves with the recipe."))
         # Bake settings (the design's numbered "1 BAKE SETTINGS" / Global card).
         f.addRow(eyebrow_chip("1", "BAKE SETTINGS", "accent2"))
         self._bake_w = self._size_combo()
@@ -839,6 +846,47 @@ def _sep() -> QLabel:
     lbl = QLabel("·")
     lbl.setObjectName("statusseg")
     return lbl
+
+
+def _helper(text: str) -> QLabel:
+    """A wrapped helper paragraph under a section title, as in the design."""
+    lbl = QLabel(text)
+    lbl.setObjectName("helper")
+    lbl.setWordWrap(True)
+    return lbl
+
+
+def _slider_field(caption: str, slider: QSlider, value: QLabel) -> QWidget:
+    """A slider row in the design's shape: caption on the left and the live value on
+    the right, over a full-width track below."""
+    w = QWidget()
+    v = QVBoxLayout(w)
+    v.setContentsMargins(0, 2, 0, 2)
+    v.setSpacing(3)
+    top = QHBoxLayout()
+    top.setContentsMargins(0, 0, 0, 0)
+    cap = QLabel(caption)
+    cap.setObjectName("fieldcap")
+    value.setObjectName("fieldval")
+    top.addWidget(cap)
+    top.addStretch(1)
+    top.addWidget(value)
+    v.addLayout(top)
+    v.addWidget(slider)
+    return w
+
+
+def _toggle_row(text: str, toggle: QWidget) -> QWidget:
+    """A toggle row: a label on the left, the pill switch pinned to the right."""
+    w = QWidget()
+    h = QHBoxLayout(w)
+    h.setContentsMargins(0, 2, 0, 2)
+    cap = QLabel(text)
+    cap.setObjectName("fieldcap")
+    h.addWidget(cap)
+    h.addStretch(1)
+    h.addWidget(toggle)
+    return w
 
 
 def launch(
