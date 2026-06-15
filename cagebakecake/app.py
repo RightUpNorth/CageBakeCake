@@ -163,6 +163,7 @@ class CageEditor:
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
         self._baked_uv: np.ndarray | None = None
+        self._packed_outputs: dict = {}  # filename -> (H,W,4) packed recipe output
         self._normals_glyph_on = False
         self._click_deselect: tuple[int, int] | None = None
         self._paint_skew = False    # paint mode: left-drag paints skew instead of selecting
@@ -1012,9 +1013,11 @@ class CageEditor:
             self._ray_mesh = bake.make_ray_mesh(self.high.points, self._cached_high_tris)
         return self._ray_mesh
 
-    def _bake_ao(self, out_path: str | None = None, progress=None, should_cancel=None) -> None:
+    def _bake_ao(self, out_path: str | None = None, progress=None, should_cancel=None,
+                 write: bool = True) -> None:
         """Bake an ambient-occlusion map of the high poly onto the low poly's UVs and
-        write it next to the low poly (or to `out_path`)."""
+        write it next to the low poly (or to `out_path`). `write=False` bakes to memory
+        only (used by recipe baking, where the packed outputs are the deliverables)."""
         if self.high is None:
             self._bake_status("AO needs a high poly (pass --high).")
             self.pl.render()
@@ -1024,7 +1027,8 @@ class CageEditor:
             self.pl.render()
             return
         w, h = self._bake_size
-        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png")
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png"
+                           if write else None)
         self._bake_status(f"Baking AO {w}x{h} ({self._ao_samples} rays/texel)...")
         self.pl.render()
         image = bake.bake_ao(
@@ -1036,29 +1040,34 @@ class CageEditor:
         )
         if image is not None:
             self._baked_ao = image
-        self._bake_status("AO cancelled." if image is None else f"Baked AO -> {out}")
+        done = "AO cancelled." if image is None else (f"Baked AO -> {out}" if out else "Baked AO.")
+        self._bake_status(done)
         self.pl.render()
 
-    def _bake_curvature(self, out_path: str | None = None) -> None:
-        """Derive a curvature map from the last baked normal map and write it out."""
+    def _bake_curvature(self, out_path: str | None = None, write: bool = True) -> None:
+        """Derive a curvature map from the last baked normal map and write it out.
+        `write=False` derives it in memory only (recipe baking)."""
         if self._baked_image is None:
             self._bake_status("Curvature needs a normal-map bake first (press Bake).")
             self.pl.render()
             return
-        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_curv.png")
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_curv.png"
+                           if write else None)
         curv = bake.curvature_from_normal_map(self._baked_image)
-        bake._write_png(out, curv)
+        if out:
+            bake._write_png(out, curv)
         self._baked_curv = curv
-        self._bake_status(f"Baked curvature -> {out}")
+        self._bake_status(f"Baked curvature -> {out}" if out else "Baked curvature.")
         self.pl.render()
 
     def _bake(self, out_path: str | None = None, resolution=None,
-              progress=None, should_cancel=None) -> None:
+              progress=None, should_cancel=None, write: bool = True) -> None:
         """Bake a tangent-space normal map from the high poly onto the low poly using the
         current cage as the per-vertex ray bound, then show it lit on the shaded low poly
         (the cage stays visible). `out_path` overrides the default `<low>_normal.png`
         (File > Export); `resolution` is an int or (width, height), default `_bake_size`.
-        Use the Normal map / Low-poly-shaded toggles to compare before and after."""
+        `write=False` bakes to memory only (recipe baking). Use the Normal map /
+        Low-poly-shaded toggles to compare before and after."""
         if self.high is None:
             self._bake_status("Bake needs a high poly (pass --high).")
             self.pl.render()
@@ -1073,7 +1082,8 @@ class CageEditor:
 
         res = resolution if resolution is not None else self._bake_size
         w, h = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
-        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png")
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png"
+                           if write else None)
         self._bake_status(f"Baking {w}x{h} (this can take a while)...")
         self.pl.render()
         result = bake.bake(
@@ -1100,8 +1110,60 @@ class CageEditor:
         # Show the result lit on the low poly without hiding the cage: shaded + normal map.
         self._normal_map_on = True
         self.set_low_style(True)
-        self._bake_status(f"Baked -> {out}   [n] normal map  [l] low-poly shading")
+        self._bake_status(f"Baked -> {out}   [n] normal map  [l] low-poly shading"
+                          if out else "Baked.   [n] normal map  [l] low-poly shading")
         self.pl.render()
+
+    def bake_recipe(self, rec, out_dir: str | None = None,
+                    progress=None, should_cancel=None) -> list[str] | None:
+        """Bake every map type a recipe needs, then pack them into its output PNGs.
+
+        Bakes each supported kind once (normal -> AO -> curvature, reusing the single
+        bakes so the cached BVH is shared), assembles a {map id -> array} table for the
+        bakeable kinds, and writes one PNG per output via bake.pack_outputs. Map kinds
+        with no bake yet (position/cavity/thickness/height, and object-space normals)
+        pack as empty channels. Returns the written paths, or None if cancelled.
+        """
+        notify = progress or (lambda _m: None)
+        kinds = {m.kind for m in rec.bake_maps}
+        cancelled = lambda: bool(should_cancel and should_cancel())
+
+        if "normal" in kinds:
+            self._bake(progress=progress, should_cancel=should_cancel, write=False)
+            if cancelled():
+                return None
+        if "ao" in kinds:
+            self._bake_ao(progress=progress, should_cancel=should_cancel, write=False)
+            if cancelled():
+                return None
+        if "curv" in kinds and self._baked_image is not None:
+            self._bake_curvature(write=False)
+
+        # Map each recipe bake map to its baked buffer (only bakeable kinds resolve;
+        # object-space normals are not produced by the tangent-space bake).
+        by_kind = {"normal": self._baked_image, "ao": self._baked_ao,
+                   "curv": self._baked_curv}
+        baked = {}
+        for m in rec.bake_maps:
+            arr = by_kind.get(m.kind)
+            if m.kind == "normal" and m.space == "object":
+                arr = None
+            if arr is not None:
+                baked[m.id] = arr
+
+        lp_name = os.path.splitext(os.path.basename(self._low_path))[0]
+        files = bake.pack_outputs(baked, rec, lp_name)
+        out_dir = out_dir or os.path.dirname(self._low_path) or "."
+        written = []
+        for fname, img in files.items():
+            path = os.path.join(out_dir, fname)
+            bake._write_png(path, img)
+            self._packed_outputs[fname] = img
+            written.append(path)
+            notify(f"wrote {path}")
+        self._bake_status(f"Recipe baked -> {len(written)} texture(s)")
+        self.pl.render()
+        return written
 
     def _bake_status(self, msg: str) -> None:
         if msg:
@@ -1112,7 +1174,8 @@ class CageEditor:
 
     def baked_maps(self) -> list[tuple[str, np.ndarray]]:
         """The baked maps currently in memory, as (name, RGB image) - feeds the 2D bake
-        preview. Empty until something is baked; cleared when a new mesh is loaded."""
+        preview. Empty until something is baked; cleared when a new mesh is loaded.
+        Packed recipe outputs are listed after the raw per-type maps."""
         maps = []
         if self._baked_image is not None:
             maps.append(("Normal", self._baked_image))
@@ -1122,6 +1185,8 @@ class CageEditor:
             maps.append(("Curvature", self._baked_curv))
         if self._baked_miss is not None:
             maps.append(("Ray miss", self._baked_miss))
+        for fname, img in self._packed_outputs.items():
+            maps.append((fname, img))
         return maps
 
     # --- lifecycle ----------------------------------------------------------

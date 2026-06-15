@@ -459,6 +459,51 @@ def curvature_from_normal_map(normal_image: np.ndarray, strength: float = 1.0) -
     return _gray_to_rgb(gray)
 
 
+def pack_outputs(baked: dict, recipe, lp_name: str) -> dict:
+    """Compose a recipe's output files from already-baked maps.
+
+    `baked` maps a BakeMap id -> its (H,W,3) uint8 buffer (only maps that were
+    actually baked appear). For each output in `recipe`, assemble an (H,W,4) uint8
+    RGBA image by reading the assigned source per channel, and key it by its
+    resolved filename (`{LP}` expanded, `.png` appended). A `color` output takes its
+    RGB from the single source in channel r and its alpha from channel a; a `packed`
+    output takes each of R/G/B/A from its own single-channel source. Unassigned (or
+    not-yet-bakeable) sources leave that channel at its default: 0 for RGB, 255 for
+    alpha (opaque). Returns {} if nothing was baked (no reference resolution).
+    """
+    ref = next(iter(baked.values()), None)
+    if ref is None:
+        return {}
+    height, width = ref.shape[:2]
+
+    def gray(map_id):
+        arr = baked.get(map_id)
+        return None if arr is None else arr[..., 0]
+
+    result: dict[str, np.ndarray] = {}
+    for out in recipe.outputs:
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[..., 3] = 255  # opaque unless an alpha source is assigned
+        if out.type == "color":
+            src = baked.get(out.ch.get("r"))
+            if src is not None:
+                rgba[..., :3] = src[..., :3]
+            a = gray(out.ch.get("a"))
+            if a is not None:
+                rgba[..., 3] = a
+        else:  # packed: each channel its own single-channel source
+            for i, c in enumerate(("r", "g", "b")):
+                g = gray(out.ch.get(c))
+                if g is not None:
+                    rgba[..., i] = g
+            a = gray(out.ch.get("a"))
+            if a is not None:
+                rgba[..., 3] = a
+        filename = f"{out.file.replace('{LP}', lp_name)}.png"
+        result[filename] = rgba
+    return result
+
+
 # --- cage-bounded ray casting (Phase 7.2) ----------------------------------
 def make_ray_mesh(high_points: np.ndarray, high_tris: np.ndarray):
     """A trimesh whose embree BVH is built once (on first ray query) and cached on it.
