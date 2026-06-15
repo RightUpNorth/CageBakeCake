@@ -232,6 +232,25 @@ QGroupBox::title {{
 
 QLabel {{ background: transparent; color: {ink}; }}
 
+QToolButton#sectionHeader {{
+    background: {panel2};
+    color: {titletext};
+    border: 1px solid {border};
+    border-radius: {radius2};
+    padding: 8px 10px;
+    margin-top: 6px;
+    font-family: "Bricolage Grotesque", "Segoe UI", sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    text-align: left;
+}}
+QToolButton#sectionHeader:hover {{ border-color: {accent}; }}
+
+QLabel#eyebrow {{ color: {inksoft}; font-weight: 700; font-size: 10px; }}
+QLabel#resolved {{ color: {inkfaint}; font-size: 10px; }}
+
+QWidget#footer {{ background: {panel2}; border-top: 1px solid {border}; }}
+
 QPushButton {{
     background: {inset};
     color: {ink};

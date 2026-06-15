@@ -10,6 +10,8 @@ the headless / screenshot route and is unaffected.
 
 from __future__ import annotations
 
+import os
+
 from pyvistaqt import QtInteractor
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
@@ -18,13 +20,14 @@ from qtpy.QtWidgets import (
     QComboBox,
     QDockWidget,
     QFileDialog,
-    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QSplitter,
@@ -32,9 +35,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import recipe, theme
 from .app import CageEditor
 from .imageview import ImageView
+from .widgets import CollapsibleSection
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -132,152 +136,182 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Reset Selected Point", self._reset_point)
 
     def _build_dock(self) -> None:
+        """The controls dock, grouped into the design's sections (Shape the Cage /
+        Name match / Recipe) inside a scroll area, with a pinned Actions footer. The
+        widgets and their editor callbacks are unchanged from the old flat form - only
+        their grouping and the primary 'Bake recipe' action are new."""
         dock = QDockWidget("Controls", self)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        panel = QWidget()
-        form = QFormLayout(panel)
+        self._recipe = recipe.presets()["Game-ready"]  # current recipe (selector: later pass)
 
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        inner = QWidget()
+        sections = QVBoxLayout(inner)
+        sections.setContentsMargins(10, 8, 10, 8)
+        sections.setSpacing(4)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        # --- C1 Shape the Cage ------------------------------------------------
+        cage_sec = CollapsibleSection("Shape the Cage")
+        f = cage_sec.form()
         self._offset = QSlider(Qt.Horizontal)
         self._offset.setRange(0, _SLIDER_STEPS)
         self._offset.valueChanged.connect(self._on_offset)
         self._offset_label = QLabel("-")
-        form.addRow("Cage offset", self._labeled(self._offset, self._offset_label))
-
-        self._opacity = QSlider(Qt.Horizontal)
-        self._opacity.setRange(0, 100)
-        self._opacity.valueChanged.connect(self._on_opacity)
-        form.addRow("Cage opacity", self._opacity)
+        f.addRow("Cage offset", self._labeled(self._offset, self._offset_label))
 
         self._skew = QSlider(Qt.Horizontal)
         self._skew.setRange(0, _SLIDER_STEPS)
         self._skew.valueChanged.connect(self._on_skew)
         self._skew_label = QLabel("-")
-        form.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
+        f.addRow("Skew (hard..soft)", self._labeled(self._skew, self._skew_label))
 
-        self._paint_skew = QCheckBox("Paint skew (left-drag, brush = soft radius)")
-        self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
-        form.addRow(self._paint_skew)
-
-        self._paint_value = QSlider(Qt.Horizontal)
-        self._paint_value.setRange(0, _SLIDER_STEPS)
-        self._paint_value.valueChanged.connect(self._on_paint_value)
-        self._paint_value_label = QLabel("-")
-        form.addRow("Brush skew", self._labeled(self._paint_value, self._paint_value_label))
-
-        self._soft = QCheckBox("Soft select")
+        self._soft = QCheckBox("Soft select (proportional)")
         self._soft.toggled.connect(self._on_soft)
-        form.addRow(self._soft)
+        f.addRow(self._soft)
 
         self._radius = QSlider(Qt.Horizontal)
         self._radius.setRange(1, _SLIDER_STEPS)
         self._radius.valueChanged.connect(self._on_radius)
         self._radius_label = QLabel("-")
-        form.addRow("Soft radius", self._labeled(self._radius, self._radius_label))
+        f.addRow("Soft radius", self._labeled(self._radius, self._radius_label))
 
-        # Display toggles. Low and high carry independent material switches; the cage and
-        # its normals stay visible in every mode.
+        self._paint_skew = QCheckBox("Paint skew (left-drag, brush = soft radius)")
+        self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
+        f.addRow(self._paint_skew)
+
+        self._paint_value = QSlider(Qt.Horizontal)
+        self._paint_value.setRange(0, _SLIDER_STEPS)
+        self._paint_value.valueChanged.connect(self._on_paint_value)
+        self._paint_value_label = QLabel("-")
+        f.addRow("Brush skew", self._labeled(self._paint_value, self._paint_value_label))
+        sections.addWidget(cage_sec)
+
+        # --- Display (interim home; the design moves these to the viewport HUD) ---
+        disp_sec = CollapsibleSection("Display")
+        f = disp_sec.form()
+        self._opacity = QSlider(Qt.Horizontal)
+        self._opacity.setRange(0, 100)
+        self._opacity.valueChanged.connect(self._on_opacity)
+        f.addRow("Cage opacity", self._opacity)
         self._low_shaded = QCheckBox("Low poly shaded")
         self._low_shaded.toggled.connect(lambda v: self.editor.set_low_style(v))
-        form.addRow(self._low_shaded)
-
+        f.addRow(self._low_shaded)
         self._low_wire = QCheckBox("Low poly wireframe")
         self._low_wire.toggled.connect(lambda v: self.editor.set_low_wire(v))
-        form.addRow(self._low_wire)
-
+        f.addRow(self._low_wire)
         self._high_visible = QCheckBox("High poly visible")
         self._high_visible.toggled.connect(lambda v: self.editor.set_high_visible(v))
-        form.addRow(self._high_visible)
-
+        f.addRow(self._high_visible)
         self._high_shaded = QCheckBox("High poly shaded")
         self._high_shaded.toggled.connect(lambda v: self.editor.set_high_style(v))
-        form.addRow(self._high_shaded)
-
+        f.addRow(self._high_shaded)
         self._high_wire = QCheckBox("High poly wireframe")
         self._high_wire.toggled.connect(lambda v: self.editor.set_high_wire(v))
-        form.addRow(self._high_wire)
-
+        f.addRow(self._high_wire)
         self._normal_map = QCheckBox("Normal map (shaded low)")
         self._normal_map.toggled.connect(lambda v: self.editor.set_normal_map(v))
-        form.addRow(self._normal_map)
-
+        f.addRow(self._normal_map)
         self._show_normals = QCheckBox("Show LP normals")
         self._show_normals.toggled.connect(lambda v: self.editor.set_low_normals(v))
-        form.addRow(self._show_normals)
-
+        f.addRow(self._show_normals)
         self._cage_points = QCheckBox("Cage points")
         self._cage_points.toggled.connect(lambda v: self.editor.set_cage_points(v))
-        form.addRow(self._cage_points)
-
+        f.addRow(self._cage_points)
         self._cage_wire = QCheckBox("Cage wireframe")
         self._cage_wire.toggled.connect(lambda v: self.editor.set_cage_wire(v))
-        form.addRow(self._cage_wire)
+        f.addRow(self._cage_wire)
+        disp_sec.set_expanded(False)  # collapsed by default; secondary to cage editing
+        sections.addWidget(disp_sec)
 
-        # Per-mesh visibility checklist (one row per prim in the loaded files).
-        self._name_match = QCheckBox("Name match (link low/high by prim name)")
+        # --- C2 Name match ----------------------------------------------------
+        nm_sec = CollapsibleSection("Name match")
+        f = nm_sec.form()
+        self._name_match = QCheckBox("Link low/high parts by prim name")
         self._name_match.toggled.connect(lambda v: self.editor.set_name_match(v))
-        form.addRow(self._name_match)
-
+        f.addRow(self._name_match)
         self._mesh_list = QListWidget()
         self._mesh_list.setMaximumHeight(120)
         self._mesh_list.itemChanged.connect(self._on_mesh_toggle)
-        form.addRow("Meshes", self._mesh_list)
+        f.addRow("Meshes", self._mesh_list)
+        sections.addWidget(nm_sec)
 
-        # Bake size: independent width and height (a non-square map is allowed).
+        # --- C3 Recipe --------------------------------------------------------
+        rec_sec = CollapsibleSection("Recipe")
+        f = rec_sec.form()
+        # Bake settings (the design's "Global" card).
         self._bake_w = self._size_combo()
         self._bake_h = self._size_combo()
         self._bake_w.currentTextChanged.connect(self._on_bake_size)
         self._bake_h.currentTextChanged.connect(self._on_bake_size)
-        form.addRow("Bake width", self._bake_w)
-        form.addRow("Bake height", self._bake_h)
-
+        f.addRow("Bake width", self._bake_w)
+        f.addRow("Bake height", self._bake_h)
         self._supersample = QComboBox()
         for s in (1, 2, 4):
             self._supersample.addItem(f"{s}x")
         self._supersample.currentTextChanged.connect(
             lambda t: self.editor.set_supersample(int(t.rstrip("x"))))
-        form.addRow("Supersample", self._supersample)
-
+        f.addRow("Supersample", self._supersample)
         self._padding = QComboBox()
         for p in (0, 2, 4, 8, 16, 32):
             self._padding.addItem(str(p))
         self._padding.currentTextChanged.connect(lambda t: self.editor.set_padding(int(t)))
-        form.addRow("Edge padding", self._padding)
-
+        f.addRow("Edge padding", self._padding)
         self._ao_samples = QComboBox()
         for s in (16, 32, 64, 128, 256):
             self._ao_samples.addItem(str(s))
         self._ao_samples.currentTextChanged.connect(lambda t: self.editor.set_ao_samples(int(t)))
-        form.addRow("AO samples", self._ao_samples)
+        f.addRow("AO samples", self._ao_samples)
+        # Individual (per-type) bakes, kept available alongside the packed recipe bake.
+        indiv = QGridLayout()
+        for col, (text, slot) in enumerate((
+            ("Bake normal", self._bake), ("Bake AO", self._bake_ao),
+            ("Bake curvature", self._bake_curvature))):
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            indiv.addWidget(btn, 0, col)
+        indiv_w = QWidget()
+        indiv_w.setLayout(indiv)
+        f.addRow("Individual", indiv_w)
+        sections.addWidget(rec_sec)
 
-        bake_btn = QPushButton("Bake")
-        bake_btn.clicked.connect(self._bake)
-        form.addRow(bake_btn)
+        sections.addStretch(1)
 
-        ao_btn = QPushButton("Bake AO")
-        ao_btn.clicked.connect(self._bake_ao)
-        form.addRow(ao_btn)
+        # --- C4 Actions footer (pinned) --------------------------------------
+        footer = QWidget()
+        footer.setObjectName("footer")
+        flay = QVBoxLayout(footer)
+        flay.setContentsMargins(12, 10, 12, 10)
+        self._bake_recipe_btn = QPushButton("Bake recipe")
+        self._bake_recipe_btn.setObjectName("primary")
+        self._bake_recipe_btn.clicked.connect(self._bake_recipe)
+        flay.addWidget(self._bake_recipe_btn)
 
-        curv_btn = QPushButton("Bake Curvature")
-        curv_btn.clicked.connect(self._bake_curvature)
-        form.addRow(curv_btn)
-
-        cancel_btn = QPushButton("Cancel bake")
-        cancel_btn.clicked.connect(self._cancel_bake)
-        form.addRow(cancel_btn)
-
-        reset_cage_btn = QPushButton("Reset Cage")
-        reset_cage_btn.clicked.connect(self._reset_cage)
-        form.addRow(reset_cage_btn)
-
-        reset_pt_btn = QPushButton("Reset Selected Point")
-        reset_pt_btn.clicked.connect(self._reset_point)
-        form.addRow(reset_pt_btn)
+        links = QHBoxLayout()
+        for text, slot in (("Cancel", self._cancel_bake),
+                           ("Reset cage", self._reset_cage),
+                           ("Reset point", self._reset_point)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            links.addWidget(b)
+        links_w = QWidget()
+        links_w.setLayout(links)
+        flay.addWidget(links_w)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        form.addRow(self._status)
+        flay.addWidget(self._status)
+        outer.addWidget(footer)
 
-        dock.setWidget(panel)
+        dock.setWidget(container)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
     def _build_central(self) -> None:
@@ -531,6 +565,26 @@ class MainWindow(QMainWindow):
             w.blockSignals(False)
         self._set_status("Bake cancelled." if self._cancel
                          else "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
+        self._refresh_preview()
+
+    def _bake_recipe(self) -> None:
+        """Bake the current recipe: every map it needs, packed into its output PNGs
+        next to the low poly. The primary dock action."""
+        self._cancel = False
+        self._set_status("Baking recipe (this can take a while)...")
+        QApplication.processEvents()
+        written = self.editor.bake_recipe(
+            self._recipe, progress=self._progress, should_cancel=lambda: self._cancel)
+        if written is None:
+            self._set_status("Recipe bake cancelled.")
+        else:
+            names = ", ".join(os.path.basename(p) for p in written)
+            self._set_status(f"Recipe baked: {len(written)} texture(s) -> {names}")
+        # The normal bake switches the low poly to shaded + normal map; reflect that.
+        for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
+            w.blockSignals(True)
+            w.setChecked(checked)
+            w.blockSignals(False)
         self._refresh_preview()
 
     def _bake_ao(self) -> None:
