@@ -8,9 +8,10 @@ window stays a thin assembly layer.
 
 from __future__ import annotations
 
-from qtpy.QtCore import QSize, Qt
+from qtpy.QtCore import QSize, Qt, Signal
 from qtpy.QtGui import QColor, QPainter
 from qtpy.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -29,6 +30,71 @@ from qtpy.QtWidgets import (
 )
 
 from . import recipe, theme
+
+
+class SegmentedControl(QWidget):
+    """A pill segmented control - a row of exclusive checkable buttons, matching the
+    design's Direction/Mood toggles. Emits changed(index) on selection."""
+
+    changed = Signal(int)
+
+    def __init__(self, options, parent=None):
+        super().__init__(parent)
+        self.setObjectName("segmented")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons = []
+        for i, text in enumerate(options):
+            b = QToolButton()
+            b.setObjectName("segment")
+            b.setText(text)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            self._group.addButton(b, i)
+            lay.addWidget(b)
+            self._buttons.append(b)
+        self._buttons[0].setChecked(True)
+        self._group.idClicked.connect(self.changed.emit)
+
+    def set_current_index(self, i: int) -> None:
+        self._buttons[i].setChecked(True)
+
+    def current_index(self) -> int:
+        return self._group.checkedId()
+
+
+def eyebrow_chip(number: str, text: str, kind: str = "accent") -> QWidget:
+    """A numbered eyebrow row: a small colored number chip + an uppercase label,
+    matching the design's '1 BAKE SETTINGS' (amber) / '2 PACKING' (accent) headers.
+    `kind` is 'accent' or 'accent2'; the chip recolors with the theme via QSS."""
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 4, 0, 2)
+    lay.setSpacing(7)
+    chip = QLabel(number)
+    chip.setObjectName("numAccent2" if kind == "accent2" else "numAccent")
+    chip.setAlignment(Qt.AlignCenter)
+    chip.setFixedSize(16, 16)
+    label = QLabel(text)
+    label.setObjectName("eyebrow")
+    lay.addWidget(chip)
+    lay.addWidget(label)
+    lay.addStretch(1)
+    return row
+
+
+def channel_chip(letter: str) -> QLabel:
+    """An 18px channel-letter chip (R/G/B/A) in the fixed channel color."""
+    lbl = QLabel(letter)
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setFixedSize(18, 18)
+    color = theme.CHANNEL_COLORS[letter.lower()]
+    lbl.setStyleSheet(
+        f"background:{color};color:#fff;border-radius:5px;font-size:10px;font-weight:700;")
+    return lbl
 
 
 class ToggleSwitch(QCheckBox):
@@ -306,16 +372,14 @@ class RecipePanel(QWidget):
         self._maps_box.setSpacing(4)
         lay.addLayout(self._maps_box)
 
-        # Packing.
+        # Packing - the design's numbered "2 PACKING" section.
+        lay.addWidget(eyebrow_chip("2", "PACKING", "accent"))
         pack_head = QHBoxLayout()
-        eb2 = QLabel("PACKING")
-        eb2.setObjectName("eyebrow")
+        pack_head.addStretch(1)
         add_color = QPushButton("+ Color map")
         add_color.clicked.connect(lambda: self._add_output("color"))
         add_packed = QPushButton("+ Packed map")
         add_packed.clicked.connect(lambda: self._add_output("packed"))
-        pack_head.addWidget(eb2)
-        pack_head.addStretch(1)
         pack_head.addWidget(add_color)
         pack_head.addWidget(add_packed)
         lay.addLayout(pack_head)
@@ -363,10 +427,9 @@ class RecipePanel(QWidget):
             space.setCurrentText(m.space or "tangent")
             space.currentTextChanged.connect(lambda t, mm=m: self._set_space(mm, t))
             h.addWidget(space)
-        else:
-            kind = QLabel(theme.MAP_LABELS[m.kind])
-            kind.setObjectName("resolved")
-            h.addWidget(kind)
+        pill = QLabel(theme.MAP_LABELS[m.kind])
+        pill.setObjectName("kindpill")
+        h.addWidget(pill)
         rm = QToolButton()
         rm.setText("x")
         rm.clicked.connect(lambda _c=False, mm=m: self._remove_map(mm))
@@ -408,13 +471,22 @@ class RecipePanel(QWidget):
         return card
 
     def _cell(self, o, channel: str, letter: str, rgb: bool) -> QWidget:
-        """A channel-assignment button: shows the assigned map name (or -), opens a menu
-        of compatible maps (3-channel for the RGB cell, 1-channel otherwise)."""
+        """A channel-assignment cell: colored channel-letter chip(s) + a flat button that
+        shows the assigned map name (or -) and opens a menu of compatible maps (3-channel
+        for the RGB cell, 1-channel otherwise)."""
         want = 3 if rgb else 1
         current = self._recipe.map_by_id(o.ch.get(channel))
+        cell = QFrame()
+        cell.setObjectName("cell")
+        h = QHBoxLayout(cell)
+        h.setContentsMargins(5, 4, 6, 4)
+        h.setSpacing(4)
+        for letter_chip in (("R", "G", "B") if rgb else (letter,)):
+            h.addWidget(channel_chip(letter_chip))
         btn = QToolButton()
+        btn.setObjectName("cellbtn")
         btn.setPopupMode(QToolButton.InstantPopup)
-        btn.setText(f"{letter}: {current.name if current else '-'}")
+        btn.setText(current.name if current else "-")
         btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         menu = QMenu(btn)
         none_act = menu.addAction("None (empty)")
@@ -424,7 +496,8 @@ class RecipePanel(QWidget):
                 act = menu.addAction(m.name)
                 act.triggered.connect(lambda _c=False, mid=m.id: self._assign(o, channel, mid))
         btn.setMenu(menu)
-        return btn
+        h.addWidget(btn, 1)
+        return cell
 
     # --- edits -----------------------------------------------------------
     def _add_map(self, kind: str) -> None:
