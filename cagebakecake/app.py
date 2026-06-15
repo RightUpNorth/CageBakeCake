@@ -34,6 +34,16 @@ from . import bake, cage, meshio, theme
 BAKE_RESOLUTION = 1024
 
 
+def _base_name(name: str) -> str:
+    """Lowercased prim name with a trailing _lp/_hp stripped - the name-match rule
+    (so 'MatBall_lp' and 'MatBall_hp' share the base 'matball')."""
+    n = name.lower()
+    for suffix in ("_lp", "_hp"):
+        if n.endswith(suffix):
+            return n[: -len(suffix)]
+    return n
+
+
 class CageEditor:
     def __init__(
         self,
@@ -183,6 +193,7 @@ class CageEditor:
         self._name_match = False
         self._low_actors: dict = {}
         self._high_actors: dict = {}
+        self._hl_parts: list = []  # parts amber-highlighted by name-match hover
         # Active theme palette key (e.g. "A-light"); drives the cage/sky viewport colors.
         self._theme_key = theme.palette_key(theme.DEFAULT_DIRECTION, theme.DEFAULT_MOOD)
 
@@ -441,6 +452,71 @@ class CageEditor:
 
     def set_name_match(self, on: bool) -> None:
         self._name_match = bool(on)
+
+    # --- name-match table (pair low/high parts by base name) ----------------
+    def name_pairs(self) -> list[dict]:
+        """Rows for the name-match table. Pair each low part to a high part whose base
+        name matches (trailing _lp/_hp stripped, case-insensitive); unpaired high parts
+        follow as their own rows. Each row is a dict {low, high, low_name, high_name,
+        status}, where status is matched / no match (or manual when name-match is off)."""
+        rows = []
+        used_high: set[int] = set()
+        for i, (lname, _p) in enumerate(self.low_parts):
+            base = _base_name(lname)
+            match = None
+            for j, (hname, _hp) in enumerate(self.high_parts):
+                if j not in used_high and _base_name(hname) == base:
+                    match = j
+                    used_high.add(j)
+                    break
+            rows.append(self._pair_row(i, match))
+        for j in range(len(self.high_parts)):
+            if j not in used_high:
+                rows.append(self._pair_row(None, j))
+        return rows
+
+    def _pair_row(self, low_idx: int | None, high_idx: int | None) -> dict:
+        lname = self.low_parts[low_idx][0] if low_idx is not None else None
+        hname = self.high_parts[high_idx][0] if high_idx is not None else None
+        if not self._name_match:
+            status = "manual"
+        elif lname and hname and _base_name(lname) == _base_name(hname):
+            status = "matched"
+        else:
+            status = "no match"
+        return {"low": low_idx, "high": high_idx,
+                "low_name": lname, "high_name": hname, "status": status}
+
+    def rename_part(self, group: str, idx: int, name: str) -> None:
+        """Rename a loaded part (name-match table edit). Drives the live match status;
+        the geometry is untouched."""
+        parts = self.low_parts if group == "low" else self.high_parts
+        if 0 <= idx < len(parts):
+            _old, poly = parts[idx]
+            parts[idx] = (name, poly)
+
+    def highlight_parts(self, parts: list[tuple[str, int]]) -> None:
+        """Amber-highlight the given mesh parts (name-match hover), restoring whatever
+        was highlighted before. Pure presentation - recolors the part actors."""
+        self.clear_part_highlight()
+        saved = []
+        for group, idx in parts:
+            actor = self._part_actor(group, idx)
+            if actor is not None:
+                saved.append((group, idx, actor.prop.color))
+                actor.prop.color = theme.MESH_HIGHLIGHT
+        self._hl_parts = saved
+        if saved:
+            self.pl.render()
+
+    def clear_part_highlight(self) -> None:
+        for group, idx, col in self._hl_parts:
+            actor = self._part_actor(group, idx)
+            if actor is not None:
+                actor.prop.color = col
+        if self._hl_parts:
+            self._hl_parts = []
+            self.pl.render()
 
     def set_normal_map(self, on: bool) -> None:
         self._normal_map_on = bool(on)
