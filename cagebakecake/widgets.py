@@ -10,16 +10,23 @@ from __future__ import annotations
 
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
+    QComboBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QPushButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+from . import recipe, theme
 
 _BADGE = {"matched": "matched", "no match": "nomatch", "manual": "manual"}
 
@@ -190,3 +197,262 @@ class NameMatchTable(QWidget):
         if editor is not None:
             editor.rename_part(group, idx, name)
             self.rebuild()  # re-derive match status live
+
+
+def _swatch(kind: str) -> QLabel:
+    """A 20px rounded type swatch carrying the kind's short tag (N, AO, ...), in the
+    fixed (non-themed) bake-map swatch color."""
+    lbl = QLabel(theme.MAP_TAGS[kind])
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setFixedSize(22, 22)
+    lbl.setStyleSheet(
+        f"background:{theme.MAP_SWATCHES[kind]};color:#fff;border-radius:6px;"
+        "font-size:9px;font-weight:700;")
+    return lbl
+
+
+class RecipePanel(QWidget):
+    """The design's Recipe section: a preset selector + export, the editable list of
+    maps to bake, and the channel-packing output cards. Edits mutate a recipe.Recipe
+    in place and call on_change(recipe) so the window can update the primary button and
+    the saved/unsaved state. {LP} previews use get_lp_name()."""
+
+    def __init__(self, get_lp_name, on_change=None, parent=None):
+        super().__init__(parent)
+        self._get_lp_name = get_lp_name
+        self._on_change = on_change or (lambda _r: None)
+        self._recipe = recipe.presets()["Game-ready"]
+        self._presets = recipe.presets()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        # Header: preset selector + export.
+        head = QHBoxLayout()
+        self._preset = QComboBox()
+        self._preset.addItems(list(self._presets))
+        self._preset.currentTextChanged.connect(self._on_preset)
+        export = QToolButton()
+        export.setText("...")
+        export.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(export)
+        menu.addAction("Export recipe (.json)...", self._export)
+        menu.addAction("Load recipe (.json)...", self._load)
+        export.setMenu(menu)
+        head.addWidget(QLabel("Preset"))
+        head.addWidget(self._preset, 1)
+        head.addWidget(export)
+        lay.addLayout(head)
+
+        # Maps to bake.
+        maps_head = QHBoxLayout()
+        eb = QLabel("MAPS TO BAKE")
+        eb.setObjectName("eyebrow")
+        add = QToolButton()
+        add.setText("+ Add")
+        add.setPopupMode(QToolButton.InstantPopup)
+        add_menu = QMenu(add)
+        for kind in theme.MAP_LABELS:
+            tag = "RGB" if kind in theme.RGB_KINDS else "grey"
+            act = add_menu.addAction(f"{theme.MAP_LABELS[kind]}  ({tag})")
+            act.triggered.connect(lambda _checked=False, k=kind: self._add_map(k))
+        add.setMenu(add_menu)
+        maps_head.addWidget(eb)
+        maps_head.addStretch(1)
+        maps_head.addWidget(add)
+        lay.addLayout(maps_head)
+        self._maps_box = QVBoxLayout()
+        self._maps_box.setSpacing(4)
+        lay.addLayout(self._maps_box)
+
+        # Packing.
+        pack_head = QHBoxLayout()
+        eb2 = QLabel("PACKING")
+        eb2.setObjectName("eyebrow")
+        add_color = QPushButton("+ Color map")
+        add_color.clicked.connect(lambda: self._add_output("color"))
+        add_packed = QPushButton("+ Packed map")
+        add_packed.clicked.connect(lambda: self._add_output("packed"))
+        pack_head.addWidget(eb2)
+        pack_head.addStretch(1)
+        pack_head.addWidget(add_color)
+        pack_head.addWidget(add_packed)
+        lay.addLayout(pack_head)
+        self._pack_box = QVBoxLayout()
+        self._pack_box.setSpacing(6)
+        lay.addLayout(self._pack_box)
+
+        self.rebuild()
+
+    # --- state -----------------------------------------------------------
+    def recipe(self):
+        return self._recipe
+
+    def _changed(self) -> None:
+        self._on_change(self._recipe)
+
+    def _on_preset(self, name: str) -> None:
+        if name in self._presets:
+            # fresh copy so editing one preset never mutates the stored template
+            self._recipe = recipe.presets()[name]
+            self.rebuild()
+            self._changed()
+
+    # --- rebuild ---------------------------------------------------------
+    def rebuild(self) -> None:
+        _clear(self._maps_box)
+        for m in self._recipe.bake_maps:
+            self._maps_box.addWidget(self._map_row(m))
+        _clear(self._pack_box)
+        for o in self._recipe.outputs:
+            self._pack_box.addWidget(self._output_card(o))
+
+    def _map_row(self, m) -> QWidget:
+        row = QFrame()
+        row.setObjectName("card")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(8, 6, 8, 6)
+        h.addWidget(_swatch(m.kind))
+        name = QLineEdit(m.name)
+        name.editingFinished.connect(lambda e=name, mm=m: self._rename_map(mm, e.text()))
+        h.addWidget(name, 1)
+        if m.kind == "normal":
+            space = QComboBox()
+            space.addItems(["tangent", "object"])
+            space.setCurrentText(m.space or "tangent")
+            space.currentTextChanged.connect(lambda t, mm=m: self._set_space(mm, t))
+            h.addWidget(space)
+        else:
+            kind = QLabel(theme.MAP_LABELS[m.kind])
+            kind.setObjectName("resolved")
+            h.addWidget(kind)
+        rm = QToolButton()
+        rm.setText("x")
+        rm.clicked.connect(lambda _c=False, mm=m: self._remove_map(mm))
+        h.addWidget(rm)
+        return row
+
+    def _output_card(self, o) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(8, 6, 8, 8)
+
+        top = QHBoxLayout()
+        fname = QLineEdit(o.file)
+        fname.editingFinished.connect(lambda e=fname, oo=o: self._rename_output(oo, e.text()))
+        top.addWidget(fname, 1)
+        top.addWidget(QLabel(".png"))
+        kind = QLabel("Color" if o.type == "color" else "Packed")
+        kind.setObjectName("eyebrow")
+        top.addWidget(kind)
+        rm = QToolButton()
+        rm.setText("x")
+        rm.clicked.connect(lambda _c=False, oo=o: self._remove_output(oo))
+        top.addWidget(rm)
+        v.addLayout(top)
+
+        resolved = QLabel("-> " + recipe.resolve_filename(o.file, self._get_lp_name()))
+        resolved.setObjectName("resolved")
+        v.addWidget(resolved)
+
+        cells = QHBoxLayout()
+        if o.type == "color":
+            cells.addWidget(self._cell(o, "r", "RGB", rgb=True), 2)
+            cells.addWidget(self._cell(o, "a", "A", rgb=False), 1)
+        else:
+            for c in ("r", "g", "b", "a"):
+                cells.addWidget(self._cell(o, c, c.upper(), rgb=False), 1)
+        v.addLayout(cells)
+        return card
+
+    def _cell(self, o, channel: str, letter: str, rgb: bool) -> QWidget:
+        """A channel-assignment button: shows the assigned map name (or -), opens a menu
+        of compatible maps (3-channel for the RGB cell, 1-channel otherwise)."""
+        want = 3 if rgb else 1
+        current = self._recipe.map_by_id(o.ch.get(channel))
+        btn = QToolButton()
+        btn.setPopupMode(QToolButton.InstantPopup)
+        btn.setText(f"{letter}: {current.name if current else '-'}")
+        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        menu = QMenu(btn)
+        none_act = menu.addAction("None (empty)")
+        none_act.triggered.connect(lambda _c=False: self._assign(o, channel, None))
+        for m in self._recipe.bake_maps:
+            if m.channels == want:
+                act = menu.addAction(m.name)
+                act.triggered.connect(lambda _c=False, mid=m.id: self._assign(o, channel, mid))
+        btn.setMenu(menu)
+        return btn
+
+    # --- edits -----------------------------------------------------------
+    def _add_map(self, kind: str) -> None:
+        self._recipe.add_map(kind)
+        self.rebuild()
+        self._changed()
+
+    def _remove_map(self, m) -> None:
+        self._recipe.remove_map(m.id)
+        self.rebuild()
+        self._changed()
+
+    def _rename_map(self, m, name: str) -> None:
+        if name and name != m.name:
+            m.name = self._recipe.unique_name(name) if name in {
+                x.name for x in self._recipe.bake_maps if x is not m} else name
+            self.rebuild()  # refresh packing cell labels
+            self._changed()
+
+    def _set_space(self, m, space: str) -> None:
+        m.space = space
+        self._changed()
+
+    def _add_output(self, kind: str) -> None:
+        if kind == "color":
+            out = recipe._color("{LP}_map", None)
+        else:
+            out = recipe._packed("{LP}_map")
+        self._recipe.outputs.append(out)
+        self.rebuild()
+        self._changed()
+
+    def _remove_output(self, o) -> None:
+        self._recipe.outputs = [x for x in self._recipe.outputs if x is not o]
+        self.rebuild()
+        self._changed()
+
+    def _rename_output(self, o, name: str) -> None:
+        if name and name != o.file:
+            o.file = name
+            self.rebuild()  # refresh the resolved preview
+            self._changed()
+
+    def _assign(self, o, channel: str, map_id) -> None:
+        if o.type == "color" and channel == "r":
+            o.ch["r"] = o.ch["g"] = o.ch["b"] = map_id  # RGB mirrors r
+        else:
+            o.ch[channel] = map_id
+        self.rebuild()
+        self._changed()
+
+    # --- json ------------------------------------------------------------
+    def _export(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export recipe", "", "JSON (*.json)")
+        if path:
+            self._recipe.save(path)
+
+    def _load(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load recipe", "", "JSON (*.json)")
+        if path:
+            self._recipe = recipe.Recipe.load(path)
+            self.rebuild()
+            self._changed()
+
+
+def _clear(layout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        w = item.widget()
+        if w is not None:
+            w.deleteLater()
