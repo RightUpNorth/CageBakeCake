@@ -534,7 +534,10 @@ class CageEditor:
         self._giz_color = {}
 
     def _add_handle(self, name: str, mesh, color: str, mode: str, **kw) -> None:
-        actor = self.pl.add_mesh(mesh, color=color, name=name, **kw)
+        # render=False: building the gizmo adds three handles; without this each add_mesh
+        # re-renders the whole (possibly multi-million-point) scene. _select renders once
+        # at the end instead, so a selection costs one frame, not four.
+        actor = self.pl.add_mesh(mesh, color=color, name=name, render=False, **kw)
         actor.mapper.SetResolveCoincidentTopologyToPolygonOffset()
         addr = actor.GetAddressAsString("")
         self._giz[name] = actor
