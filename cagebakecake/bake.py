@@ -159,6 +159,7 @@ def bake(
     padding: int = 0,
     should_cancel=None,
     return_miss: bool = False,
+    ray_mesh=None,
 ) -> "np.ndarray | tuple[np.ndarray, np.ndarray] | None":
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
 
@@ -249,7 +250,7 @@ def bake(
         return None
     notify(f"casting {len(origins)} rays into {high_tris.shape[0]} high-poly triangles")
     hit_normals, hit_mask = _cast_to_high(
-        origins, -direction, max_len, high_points, high_tris, high_normals
+        origins, -direction, max_len, high_points, high_tris, high_normals, ray_mesh=ray_mesh
     )
 
     # Per-triangle tangent basis, expanded to the covered texels. The frame normal is the
@@ -373,6 +374,7 @@ def bake_ao(
     progress=None,
     padding: int = 0,
     should_cancel=None,
+    ray_mesh=None,
 ) -> np.ndarray | None:
     """Bake an ambient-occlusion map of the high poly onto the low poly's UVs.
 
@@ -409,9 +411,7 @@ def bake_ao(
     eps = max_dist * 1e-3 + 1e-9
     origins = surf + nrm * eps
 
-    import trimesh
-    mesh = trimesh.Trimesh(vertices=np.asarray(high_points, dtype=np.float64),
-                           faces=np.asarray(high_tris, dtype=np.int64), process=False)
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
     samples = int(samples)
     notify(f"AO: {samples} rays x {len(origins)} texels into {len(high_tris)} triangles")
     occ = np.zeros(len(origins))
@@ -460,6 +460,23 @@ def curvature_from_normal_map(normal_image: np.ndarray, strength: float = 1.0) -
 
 
 # --- cage-bounded ray casting (Phase 7.2) ----------------------------------
+def make_ray_mesh(high_points: np.ndarray, high_tris: np.ndarray):
+    """A trimesh whose embree BVH is built once (on first ray query) and cached on it.
+
+    Building the BVH over a dense high poly is the dominant bake cost (~9 s for 13M
+    triangles), and it does not change while the cage is edited. Build this once and
+    pass it to `bake` / `bake_ao` as `ray_mesh` so repeat bakes skip the rebuild; make a
+    fresh one only when the high poly itself changes.
+    """
+    import trimesh
+
+    return trimesh.Trimesh(
+        vertices=np.asarray(high_points, dtype=np.float64),
+        faces=np.asarray(high_tris, dtype=np.int64),
+        process=False,
+    )
+
+
 def _cast_to_high(
     origins: np.ndarray,
     dirs: np.ndarray,
@@ -467,19 +484,15 @@ def _cast_to_high(
     high_points: np.ndarray,
     high_tris: np.ndarray,
     high_normals: np.ndarray,
+    ray_mesh=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Nearest high-poly hit per ray, with the barycentric-interpolated world normal.
 
     Returns (normals (M,3), mask (M,)) where mask is True for rays that hit within
-    their length bound. Uses trimesh's embree backend when available.
+    their length bound. Uses trimesh's embree backend when available. Pass `ray_mesh`
+    (from `make_ray_mesh`) to reuse a cached BVH across bakes; otherwise one is built.
     """
-    import trimesh
-
-    mesh = trimesh.Trimesh(
-        vertices=np.asarray(high_points, dtype=np.float64),
-        faces=np.asarray(high_tris, dtype=np.int64),
-        process=False,
-    )
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
     locations, ray_idx, tri_idx = mesh.ray.intersects_location(
         ray_origins=origins, ray_directions=dirs, multiple_hits=False
     )

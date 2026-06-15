@@ -76,6 +76,11 @@ class CageEditor:
             self.high = None
             self.high_parts = []
             self._cached_high_tris = None
+        # The high-poly ray-cast mesh (embree BVH) is the dominant bake cost and does not
+        # change while the cage is edited, so build it once and reuse it across bakes.
+        # A fresh CageEditor is created when a new high poly is loaded, so this is naturally
+        # tied to the current high poly - no explicit invalidation needed.
+        self._ray_mesh = None
 
         # The cage's rest geometry: a topology-matched cage is used directly; a cage with
         # different topology is resampled onto the low poly along its normals so the rest of
@@ -186,6 +191,12 @@ class CageEditor:
         self._handle_picker.SetTolerance(0.01)
         self._mesh_picker = vtk.vtkCellPicker()
         self._mesh_picker.SetTolerance(0.005)
+        # A dedicated hover picker restricted to the cage actor: hovering happens on every
+        # mouse-move, so picking the whole scene (a dense high poly is millions of cells)
+        # is the interactive bottleneck. Selection still uses the full-scene picker.
+        self._hover_picker = vtk.vtkCellPicker()
+        self._hover_picker.SetTolerance(0.01)
+        self._hover_state: tuple | None = None  # last hover result, to skip redundant renders
         self._add_actors()
         self._setup_environment()
 
@@ -217,6 +228,10 @@ class CageEditor:
         hover_sphere = pv.Sphere(radius=self._handle_radius * 0.6)
         self._hover_actor = self.pl.add_mesh(hover_sphere, color="white", name="hover_highlight")
         self._hover_actor.SetVisibility(False)
+        # Hover picks only the cage surface (cheap), not the whole scene.
+        self._hover_picker.InitializePickList()
+        self._hover_picker.AddPickList(self.cage_actor)
+        self._hover_picker.PickFromListOn()
         self.pl.add_axes()
         self.pl.set_background("slategray")
 
@@ -675,20 +690,30 @@ class CageEditor:
         self.pl.render()
 
     def _hover(self, x: int, y: int) -> None:
-        actor = self._handle_under_cursor(x, y) if self.selected is not None else None
-        if actor is not None:
-            self._highlight_handle(actor)
-            self._hover_actor.SetVisibility(False)
-            self.pl.render()
+        # Re-render only when the hover result actually changes - a full render of a dense
+        # scene on every mouse-move is the interactive bottleneck (see docs/baking.md perf).
+        handle = self._handle_under_cursor(x, y) if self.selected is not None else None
+        if handle is not None:
+            addr = handle.GetAddressAsString("")
+            if self._hover_state != ("handle", addr):
+                self._highlight_handle(handle)
+                self._hover_actor.SetVisibility(False)
+                self._hover_state = ("handle", addr)
+                self.pl.render()
             return
+        # Nearest cage vertex under the cursor (cage-only pick = cheap).
+        self._hover_picker.Pick(x, y, 0, self.pl.renderer)
+        idx = (self._nearest_vertex(self._hover_picker.GetPickPosition())
+               if self._hover_picker.GetCellId() >= 0 else None)
+        if self._hover_state == ("vertex", idx):
+            return  # unchanged -> skip the re-render
         self._highlight_handle(None)
-        self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
-        if self._mesh_picker.GetCellId() >= 0:
-            idx = self._nearest_vertex(self._mesh_picker.GetPickPosition())
+        if idx is not None:
             self._hover_actor.SetPosition(*self.cage.points[idx])
             self._hover_actor.SetVisibility(True)
         else:
             self._hover_actor.SetVisibility(False)
+        self._hover_state = ("vertex", idx)
         self.pl.render()
 
     @staticmethod
@@ -960,6 +985,13 @@ class CageEditor:
         """Hemisphere rays per texel for the AO bake (dock dropdown)."""
         self._ao_samples = max(1, int(n))
 
+    def _get_ray_mesh(self):
+        """The cached high-poly ray mesh (embree BVH), built on first use. Reused by every
+        bake so only the first one pays the BVH build."""
+        if self._ray_mesh is None and self.high is not None:
+            self._ray_mesh = bake.make_ray_mesh(self.high.points, self._cached_high_tris)
+        return self._ray_mesh
+
     def _bake_ao(self, out_path: str | None = None, progress=None, should_cancel=None) -> None:
         """Bake an ambient-occlusion map of the high poly onto the low poly's UVs and
         write it next to the low poly (or to `out_path`)."""
@@ -980,7 +1012,7 @@ class CageEditor:
             self.high.points, self._cached_high_tris, resolution=(w, h),
             samples=self._ao_samples, padding=self._padding, out_path=out,
             progress=progress or (lambda m: print(f"[ao] {m}")),
-            should_cancel=should_cancel,
+            should_cancel=should_cancel, ray_mesh=self._get_ray_mesh(),
         )
         if image is not None:
             self._baked_ao = image
@@ -1033,6 +1065,7 @@ class CageEditor:
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
             supersample=self._supersample, padding=self._padding,
             should_cancel=should_cancel, return_miss=True,
+            ray_mesh=self._get_ray_mesh(),  # cached embree BVH (perf)
         )
         if result is None:
             self._bake_status("Bake cancelled.")

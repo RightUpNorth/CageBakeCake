@@ -98,10 +98,24 @@ Runtime is USD-only; FBX/OBJ are converted offline via Blender.
 
 ## F. Performance and scale
 
+A profiling pass (cProfile + scalene + py-spy, on the 6.5M-point bin high poly) found
+two hotspots, both now addressed:
+
+- **Bake BVH rebuild (DONE).** ~40% of each bake was rebuilding the embree BVH over the
+  unchanged high poly. `bake.make_ray_mesh` builds it once and `CageEditor` reuses it
+  across bakes (`ray_mesh=`), cutting repeat bakes ~23s -> ~8s. This is also the
+  foundation for additive re-bake (item C).
+- **Per-mouse-move render/pick (DONE).** Hover cell-picked the whole scene and
+  re-rendered on every move. Hover now uses a cage-only picker and skips the render when
+  the hovered vertex is unchanged.
+
+Still open:
+
 - **[med] Threaded bake.** The bake runs on the UI thread (kept responsive by pumping
   events); a worker thread would keep the UI fully live and allow baking while editing.
 - **[low] Large-mesh viewport handling** (LOD / decimated display for very dense high
-  polys).
+  polys) - the high poly is ~12 GB resident at 6.5M points, so very dense assets will
+  still pressure memory and render cost.
 
 ## G. Workflow / automation
 
