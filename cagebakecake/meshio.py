@@ -186,6 +186,46 @@ def load_mesh(path: str) -> pv.PolyData:
     return load_scene(path, with_uvs=False)["merged"]
 
 
+def _vtk_faces_to_usd(faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Split a VTK/pyvista flat face array [n, i0..in-1, n, ...] into USD topology
+    (faceVertexCounts, faceVertexIndices) - the inverse of `_faces_to_vtk`."""
+    faces = np.asarray(faces, dtype=np.int64)
+    counts, indices, i, n = [], [], 0, faces.size
+    while i < n:
+        c = int(faces[i])
+        counts.append(c)
+        indices.append(faces[i + 1:i + 1 + c])
+        i += c + 1
+    return (np.asarray(counts, dtype=np.int64),
+            np.concatenate(indices) if indices else np.empty(0, dtype=np.int64))
+
+
+def save_mesh(path: str, points: np.ndarray, faces: np.ndarray, name: str = "cage") -> None:
+    """Write a single mesh to a USD file in the canonical frame (metres, Z-up).
+
+    `points` are the canonical-frame world points the editor works in (what
+    `load_scene` returns after `_to_canonical_frame`); `faces` is the pyvista flat face
+    array (`PolyData.faces`). The stage is authored with metersPerUnit=1 and upAxis=Z
+    and an identity prim transform, so reading the file back through `load_scene` is a
+    no-op (`_to_canonical_frame` leaves it untouched) - the cage round-trips exactly.
+    A DCC reads it as a metres / Z-up mesh, which USD's stage metadata makes explicit.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    counts, indices = _vtk_faces_to_usd(faces)
+    stage = Usd.Stage.CreateNew(str(path))
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    mesh = UsdGeom.Mesh.Define(stage, f"/{name}")
+    mesh.CreatePointsAttr([tuple(p) for p in points])
+    mesh.CreateFaceVertexCountsAttr([int(c) for c in counts])
+    mesh.CreateFaceVertexIndicesAttr([int(i) for i in indices])
+    lo = points.min(axis=0)
+    hi = points.max(axis=0)
+    mesh.CreateExtentAttr([tuple(lo), tuple(hi)])
+    stage.SetDefaultPrim(mesh.GetPrim())
+    stage.GetRootLayer().Save()
+
+
 def load_faces_uvs(path: str, with_uvs: bool = True):
     """Merged (tris (F,3), uvs (F,3,2) or None) - the bake's low-poly input. Kept for
     callers that only need the triangulation; `load_scene` returns the same arrays."""

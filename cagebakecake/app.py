@@ -921,6 +921,19 @@ class CageEditor:
         self._cage_path = out
         print(f"[create-cage] wrote {out}")
 
+    def save_cage(self, out_path: str | None = None) -> str:
+        """Write the *edited* cage (global push + every per-vertex/skew edit) to USD.
+
+        Unlike `_create_cage`, which copies the untouched source low poly, this saves the
+        cage geometry the artist actually authored. `out_path` defaults to
+        <low-stem>_cage_edited.usd next to the low poly. Returns the path written."""
+        if out_path is None:
+            stem, _ext = os.path.splitext(self._low_path)
+            out_path = f"{stem}_cage_edited.usd"
+        meshio.save_mesh(out_path, self.cage.points, self.cage.faces)
+        print(f"[save-cage] wrote {out_path}")
+        return out_path
+
     # --- view toggles -------------------------------------------------------
     def _toggle_high(self) -> None:
         """Show/hide the high poly so it stops occluding the cage and low poly. Tracked so
