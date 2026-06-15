@@ -253,6 +253,21 @@ QLabel#resolved {{ color: {inkfaint}; font-size: 10px; }}
 
 QWidget#footer {{ background: {panel2}; border-top: 1px solid {border}; }}
 
+QFrame#card {{
+    background: {panel2};
+    border: 1px solid {border};
+    border-radius: 9px;
+}}
+QToolButton {{
+    background: {inset};
+    color: {ink};
+    border: 1px solid {border2};
+    border-radius: 7px;
+    padding: 4px 8px;
+}}
+QToolButton:hover {{ border-color: {accent}; }}
+QToolButton::menu-indicator {{ image: none; width: 0; }}
+
 QFrame#nmRow {{ border-top: 1px solid {border}; }}
 QFrame#nmRow:hover {{ background: {inset}; }}
 QLabel[glyph="matched"] {{ color: {good}; font-size: 14px; }}

@@ -35,10 +35,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import recipe, theme
+from . import theme
 from .app import CageEditor
 from .imageview import ImageView
-from .widgets import CollapsibleSection, NameMatchTable
+from .widgets import CollapsibleSection, NameMatchTable, RecipePanel
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -142,7 +142,6 @@ class MainWindow(QMainWindow):
         their grouping and the primary 'Bake recipe' action are new."""
         dock = QDockWidget("Controls", self)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self._recipe = recipe.presets()["Game-ready"]  # current recipe (selector: later pass)
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -285,6 +284,10 @@ class MainWindow(QMainWindow):
         indiv_w = QWidget()
         indiv_w.setLayout(indiv)
         f.addRow("Individual", indiv_w)
+        # The recipe editor: preset selector, maps to bake, and channel packing.
+        self._recipe_panel = RecipePanel(
+            get_lp_name=self._lp_name, on_change=self._on_recipe_change)
+        f.addRow(self._recipe_panel)
         sections.addWidget(rec_sec)
 
         sections.addStretch(1)
@@ -317,6 +320,7 @@ class MainWindow(QMainWindow):
 
         dock.setWidget(container)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._on_recipe_change(self._recipe_panel.recipe())  # seed the button subtitle
 
     def _build_central(self) -> None:
         """The central area is a horizontal splitter: the 2D bake preview on the left,
@@ -585,6 +589,16 @@ class MainWindow(QMainWindow):
                          else "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
         self._refresh_preview()
 
+    def _lp_name(self) -> str:
+        """The low-poly stem, for {LP} expansion in packing filenames."""
+        return os.path.splitext(os.path.basename(self._low_path))[0]
+
+    def _on_recipe_change(self, rec) -> None:
+        """Reflect the recipe's map/output counts on the primary button (the design's
+        '<n> maps -> <n> textures' subtitle)."""
+        self._bake_recipe_btn.setText(
+            f"Bake recipe  ({len(rec.bake_maps)} maps -> {len(rec.outputs)} textures)")
+
     def _bake_recipe(self) -> None:
         """Bake the current recipe: every map it needs, packed into its output PNGs
         next to the low poly. The primary dock action."""
@@ -592,7 +606,8 @@ class MainWindow(QMainWindow):
         self._set_status("Baking recipe (this can take a while)...")
         QApplication.processEvents()
         written = self.editor.bake_recipe(
-            self._recipe, progress=self._progress, should_cancel=lambda: self._cancel)
+            self._recipe_panel.recipe(), progress=self._progress,
+            should_cancel=lambda: self._cancel)
         if written is None:
             self._set_status("Recipe bake cancelled.")
         else:
