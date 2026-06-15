@@ -110,6 +110,8 @@ LP_NAME = {"A": "matball_lp", "B": "bin_lp"}
 # --- fixed (non-themed) colors from the handoff ----------------------------
 # RGBA channel chips and bake-map type swatches: explicitly "do NOT theme these".
 CHANNEL_COLORS = {"r": "#d8564e", "g": "#5aac5f", "b": "#4b8fe0", "a": "#8b8b93"}
+# Mesh-highlight overlay (name-match hover): amber, fixed.
+MESH_HIGHLIGHT = "#ffaa26"
 MAP_SWATCHES = {
     "normal": "#8a86ff", "position": "#e0608a", "ao": "#8b8b93",
     "curv": "#5aac5f", "cavity": "#6b6b72", "thickness": "#b07a52",
@@ -250,6 +252,18 @@ QLabel#eyebrow {{ color: {inksoft}; font-weight: 700; font-size: 10px; }}
 QLabel#resolved {{ color: {inkfaint}; font-size: 10px; }}
 
 QWidget#footer {{ background: {panel2}; border-top: 1px solid {border}; }}
+
+QFrame#nmRow {{ border-top: 1px solid {border}; }}
+QFrame#nmRow:hover {{ background: {inset}; }}
+QLabel[glyph="matched"] {{ color: {good}; font-size: 14px; }}
+QLabel[glyph="nomatch"] {{ color: {warn}; font-size: 14px; }}
+QLabel[glyph="manual"] {{ color: {inkfaint}; font-size: 14px; }}
+QLabel[badge="matched"] {{ color: {good}; border: 1px solid {good};
+    border-radius: 8px; padding: 1px 6px; font-size: 9px; font-weight: 700; }}
+QLabel[badge="nomatch"] {{ color: {warn}; border: 1px solid {warn};
+    border-radius: 8px; padding: 1px 6px; font-size: 9px; font-weight: 700; }}
+QLabel[badge="manual"] {{ color: {inksoft}; border: 1px solid {border2};
+    border-radius: 8px; padding: 1px 6px; font-size: 9px; font-weight: 700; }}
 
 QPushButton {{
     background: {inset};

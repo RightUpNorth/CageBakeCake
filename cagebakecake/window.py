@@ -38,7 +38,7 @@ from qtpy.QtWidgets import (
 from . import recipe, theme
 from .app import CageEditor
 from .imageview import ImageView
-from .widgets import CollapsibleSection
+from .widgets import CollapsibleSection, NameMatchTable
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
@@ -229,6 +229,12 @@ class MainWindow(QMainWindow):
         self._cage_wire = QCheckBox("Cage wireframe")
         self._cage_wire.toggled.connect(lambda v: self.editor.set_cage_wire(v))
         f.addRow(self._cage_wire)
+        # Per-part visibility checklist (moved here from Name match; the table below is
+        # about pairing, this is about showing/hiding parts).
+        self._mesh_list = QListWidget()
+        self._mesh_list.setMaximumHeight(120)
+        self._mesh_list.itemChanged.connect(self._on_mesh_toggle)
+        f.addRow("Meshes", self._mesh_list)
         disp_sec.set_expanded(False)  # collapsed by default; secondary to cage editing
         sections.addWidget(disp_sec)
 
@@ -236,12 +242,10 @@ class MainWindow(QMainWindow):
         nm_sec = CollapsibleSection("Name match")
         f = nm_sec.form()
         self._name_match = QCheckBox("Link low/high parts by prim name")
-        self._name_match.toggled.connect(lambda v: self.editor.set_name_match(v))
+        self._name_match.toggled.connect(self._on_name_match)
         f.addRow(self._name_match)
-        self._mesh_list = QListWidget()
-        self._mesh_list.setMaximumHeight(120)
-        self._mesh_list.itemChanged.connect(self._on_mesh_toggle)
-        f.addRow("Meshes", self._mesh_list)
+        self._name_table = NameMatchTable(lambda: self.editor, on_hover=self._on_pair_hover)
+        f.addRow(self._name_table)
         sections.addWidget(nm_sec)
 
         # --- C3 Recipe --------------------------------------------------------
@@ -482,6 +486,7 @@ class MainWindow(QMainWindow):
             self._mesh_list.addItem(item)
         for w in widgets:
             w.blockSignals(False)
+        self._name_table.rebuild()  # repopulate name-match rows for the loaded parts
 
     # --- theming ------------------------------------------------------------
     def _on_direction(self, idx: int) -> None:
@@ -536,6 +541,19 @@ class MainWindow(QMainWindow):
     def _on_mesh_toggle(self, item: QListWidgetItem) -> None:
         group, idx = item.data(Qt.UserRole)
         self.editor.set_part_visible(group, idx, item.checkState() == Qt.Checked)
+
+    def _on_name_match(self, checked: bool) -> None:
+        self.editor.set_name_match(checked)
+        self._name_table.rebuild()  # status flips between manual and derived
+
+    def _on_pair_hover(self, label: str | None) -> None:
+        """Name-match row hover: the viewport highlight is driven by the table; this
+        mirrors the design's top-center 'Highlighting <part>' pill in the status bar
+        (a proper HUD pill arrives with the viewport overlays)."""
+        if label:
+            self.statusBar().showMessage(f"Highlighting {label}")
+        else:
+            self.statusBar().showMessage(self._status.text())
 
     # --- menu / button actions ----------------------------------------------
     def _reset_cage(self) -> None:
