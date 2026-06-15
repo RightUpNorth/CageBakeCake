@@ -108,6 +108,8 @@ class ToggleSwitch(QCheckBox):
     _KNOB = 16
 
     def sizeHint(self) -> QSize:
+        if not self.text():  # pill only - used at the right edge of a labeled row
+            return QSize(self._TRACK_W + 4, self._TRACK_H + 4)
         base = super().sizeHint()
         return QSize(base.width() + self._TRACK_W + 6, max(base.height(), self._TRACK_H + 2))
 

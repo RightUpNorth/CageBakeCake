@@ -250,21 +250,24 @@ QGroupBox::title {{
 QLabel {{ background: transparent; color: {ink}; }}
 
 QToolButton#sectionHeader {{
-    background: {panel2};
+    background: transparent;
     color: {titletext};
-    border: 1px solid {border};
-    border-radius: {radius2};
-    padding: 8px 10px;
-    margin-top: 6px;
+    border: none;
+    border-top: 1px solid {border};
+    padding: 12px 2px 4px 2px;
+    margin-top: 4px;
     font-family: "Bricolage Grotesque", "Segoe UI", sans-serif;
     font-weight: 700;
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
 }}
-QToolButton#sectionHeader:hover {{ border-color: {accent}; }}
+QToolButton#sectionHeader:hover {{ color: {accent}; }}
 
 QLabel#eyebrow {{ color: {inksoft}; font-weight: 700; font-size: 10px; }}
 QLabel#resolved {{ color: {inkfaint}; font-size: 10px; }}
+QLabel#helper {{ color: {inksoft}; font-size: 11px; }}
+QLabel#fieldcap {{ color: {ink}; font-size: 12px; }}
+QLabel#fieldval {{ color: {inksoft}; font-size: 12px; font-weight: 600; }}
 
 QWidget#footer {{ background: {panel2}; border-top: 1px solid {border}; }}
 
@@ -433,6 +436,8 @@ QSlider::handle:horizontal {{
     width: 15px; height: 15px; margin: -6px 0; border-radius: 7px;
     background: {panel}; border: 2px solid {accent};
 }}
+QSlider#amberSlider::sub-page:horizontal {{ background: {accent2}; border-radius: 2px; }}
+QSlider#amberSlider::handle:horizontal {{ border: 2px solid {accent2}; }}
 
 QScrollBar:vertical {{ background: {panel}; width: 11px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {border2}; border-radius: 5px; min-height: 24px; }}
