@@ -67,12 +67,14 @@ you when the bake went wrong.
   stop cross-projecting. The BVH is rebuilt over the moved high poly (the in-place cache
   is bypassed); the encode is translation-invariant, so the map is unchanged but for the
   removed cross-hits. Applies to the normal and AO bakes and saves with the project.
-- **[high] Ray-miss / projection feedback. (PARTLY DONE)** The normal bake now also
-  produces a "Ray miss" map (`bake.bake(..., return_miss=True)` -> `_miss_map`): green
-  where a ray hit the high poly, red where it missed (the cage failed to reach a
-  surface), shown in the bitmap viewer's Map dropdown. Still open: distinguishing
-  too-tight (poke-through) from too-loose (wrong surface) misses, and a 3D in-viewport
-  overlay of the missed regions on the low poly.
+- **[high] Ray-miss / projection feedback. (DONE)** The normal bake produces a "Ray miss"
+  map (`bake.bake(..., return_miss=True)`) shown in the bitmap viewer's Map dropdown, now
+  three-way: green where a ray hit the high poly, **orange where the high poly pokes out
+  beyond the cage (too tight)** and **red where nothing was found nearby (too loose)**.
+  The poke-through split comes from a second, outward cast on just the missed texels. With
+  `return_face_miss=True` the bake also returns a per-low-face class, which drives a **3D
+  in-viewport overlay** (`CageEditor.set_miss_overlay`, View menu / `[m]` / dock toggle)
+  painting the missed low-poly faces orange/red over the surface.
 - **[high] Additive / incremental re-bake (explicitly requested). (DONE)**
   `CageEditor.rebake` (Bake > Re-bake changed region / dock "Re-bake region") diffs the
   current cage against the snapshot the last full bake stored (`_baked_cage_points`),
@@ -146,7 +148,7 @@ If the goal is "a credible cage *authoring* + baking tool," the load-bearing gap
 1. **Cage save/load** (A) - without it the tool cannot do its titular job end to end.
 2. **Bitmap viewer** (D) - see what you baked.
 3. **Ray-miss / projection feedback** (C) - know whether the cage is doing its job.
-   (Core "Ray miss" map done; tight-vs-loose split and 3D overlay still open.)
+   (Done: green/orange/red miss map with poke-through vs too-loose, plus a 3D overlay.)
 4. **Push/inflate brush + symmetry** (B) - make cage editing fast, not vertex-by-vertex.
 5. **Exploded / per-part bake** (C) - correct multi-part bakes.
 

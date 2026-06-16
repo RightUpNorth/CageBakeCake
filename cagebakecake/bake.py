@@ -29,10 +29,13 @@ import numpy as np
 FLAT_RGB = np.array([128, 128, 255], dtype=np.uint8)  # tangent-space (0,0,1)
 
 # Ray-miss / projection-feedback map colours: a covered texel is green where its ray
-# found the high poly and red where it missed (the cage failed to reach a surface);
-# uncovered background is dark grey. Partly-covered texels lerp green->red by miss frac.
+# found the high poly, and where it missed it is split into too-tight poke-through
+# (orange: the high poly pokes out *beyond* the cage) and too-loose / no-surface (red:
+# no high poly nearby in either direction). Uncovered background is dark grey; a
+# partly-covered texel blends these by the fraction of its subtexels in each class.
 MISS_HIT = np.array([40, 160, 40], dtype=np.uint8)
-MISS_MISS = np.array([230, 50, 50], dtype=np.uint8)
+MISS_POKE = np.array([235, 140, 30], dtype=np.uint8)   # too tight (poke-through)
+MISS_MISS = np.array([230, 50, 50], dtype=np.uint8)    # too loose / no surface
 MISS_BG = np.array([28, 28, 30], dtype=np.uint8)
 
 
@@ -164,8 +167,9 @@ def bake(
     padding: int = 0,
     should_cancel=None,
     return_miss: bool = False,
+    return_face_miss: bool = False,
     ray_mesh=None,
-) -> "np.ndarray | tuple[np.ndarray, np.ndarray] | None":
+) -> "np.ndarray | tuple | None":
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
 
     `should_cancel` is an optional predicate polled before the expensive ray cast; if it
@@ -195,9 +199,12 @@ def bake(
     Writes a PNG when out_path is given. Raises ValueError if the low poly has no UVs.
 
     With `return_miss`, returns `(image, miss_map)` instead of just `image`: the miss map
-    is a ray-miss / projection-feedback image (green where a ray hit the high poly, red
-    where it missed, dark background) at the output resolution - it shows where the cage
-    failed to reach a surface. Cancelled bakes still return None.
+    is a ray-miss / projection-feedback image at the output resolution showing where the
+    cage failed to capture the high poly - green where a ray hit it, orange where the high
+    poly pokes out beyond the cage (too tight), red where nothing was found nearby (too
+    loose), dark background. With `return_face_miss`, also returns a per-low-face class
+    array (`(image, miss_map, face_class)`; 0 ok, 1 poke-through, 2 loose) for a 3D
+    in-viewport overlay. Cancelled bakes still return None.
     """
     low_uvs = np.asarray(low_uvs, dtype=np.float64)
     if low_uvs.size == 0 or low_uvs.shape != (low_tris.shape[0], 3, 2):
@@ -225,7 +232,10 @@ def bake(
         if out_path:
             _write_png(out_path, image)
         if return_miss:
-            return image, np.tile(MISS_BG, (height, width, 1))  # nothing covered
+            miss = np.tile(MISS_BG, (height, width, 1))  # nothing covered
+            if return_face_miss:
+                return image, miss, np.zeros(low_tris.shape[0], dtype=np.int64)
+            return image, miss
         return image
     covered[yx[:, 0], yx[:, 1]] = True
 
@@ -254,8 +264,9 @@ def bake(
         notify("cancelled")
         return None
     notify(f"casting {len(origins)} rays into {high_tris.shape[0]} high-poly triangles")
+    cast_mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
     hit_normals, hit_mask = _cast_to_high(
-        origins, -direction, max_len, high_points, high_tris, high_normals, ray_mesh=ray_mesh
+        origins, -direction, max_len, high_points, high_tris, high_normals, ray_mesh=cast_mesh
     )
 
     # Per-triangle tangent basis, expanded to the covered texels. The frame normal is the
@@ -280,7 +291,20 @@ def bake(
         _write_png(out_path, image)
         notify(f"wrote {out_path}")
     if return_miss:
-        miss = _miss_map(yx, hit_mask, covered, ss, width, height)
+        # Classify the missed texels: cast outward (past the cage) from the cage point;
+        # a hit means the high poly pokes out beyond the cage (too tight = poke-through),
+        # otherwise the cage is too loose / there is no surface nearby.
+        poke = np.zeros(len(yx), dtype=bool)
+        miss_idx = np.nonzero(~hit_mask)[0]
+        if len(miss_idx):
+            _n, out_hit = _cast_to_high(
+                origins[miss_idx], direction[miss_idx], offset[miss_idx] + eps,
+                high_points, high_tris, high_normals, ray_mesh=cast_mesh)
+            poke[miss_idx] = out_hit
+        miss = _miss_map(yx, hit_mask, covered, ss, width, height, poke=poke)
+        if return_face_miss:
+            return image, miss, _face_miss_class(
+                low_tris.shape[0], tri_index, hit_mask, poke)
         return image, miss
     return image
 
@@ -352,26 +376,51 @@ def rebake_faces(
 
 
 # --- ray-miss / projection feedback ----------------------------------------
-def _miss_map(yx, hit_mask, covered, ss: int, width: int, height: int) -> np.ndarray:
-    """An (H,W,3) projection-feedback image: per output texel, green where every covered
-    subtexel's ray hit the high poly, red where they all missed, lerped between for a
-    partial block, and dark background where nothing was covered. `covered`/`hit` live at
-    render (supersampled) resolution; blocks are averaged down to (height, width)."""
+def _miss_map(yx, hit_mask, covered, ss: int, width: int, height: int,
+              poke=None) -> np.ndarray:
+    """An (H,W,3) projection-feedback image: per output texel, a blend of green (covered
+    subtexels whose ray hit the high poly), orange (missed but the high poly pokes out
+    beyond the cage = too tight) and red (missed with nothing nearby = too loose), over a
+    dark background where nothing was covered. `covered`/`hit`/`poke` live at render
+    (supersampled) resolution; subtexels are averaged down into (height, width) blocks.
+
+    `poke` (per covered texel, aligned with `yx`) splits the misses; when None every miss
+    is treated as too-loose (the old green/red behaviour)."""
     rh, rw = covered.shape
     hits = np.zeros((rh, rw), dtype=bool)
-    hy = yx[hit_mask]
-    hits[hy[:, 0], hy[:, 1]] = True
-    miss = covered & ~hits
-    cov_blocks = covered.reshape(height, ss, width, ss).sum(axis=(1, 3)).astype(np.float64)
-    miss_blocks = miss.reshape(height, ss, width, ss).sum(axis=(1, 3)).astype(np.float64)
+    hits[yx[hit_mask][:, 0], yx[hit_mask][:, 1]] = True
+    poke_grid = np.zeros((rh, rw), dtype=bool)
+    if poke is not None and poke.any():
+        py = yx[poke]
+        poke_grid[py[:, 0], py[:, 1]] = True
+    hit_cov = hits & covered
+    poke_cov = poke_grid & covered & ~hits
+    loose_cov = covered & ~hits & ~poke_grid
+
+    def blocks(mask):
+        return mask.reshape(height, ss, width, ss).sum(axis=(1, 3)).astype(np.float64)
+
+    cov_b = blocks(covered)
     out = np.tile(MISS_BG, (height, width, 1))
-    has = cov_blocks > 0
-    frac = np.zeros((height, width), dtype=np.float64)
-    frac[has] = miss_blocks[has] / cov_blocks[has]
-    col = (MISS_HIT.astype(np.float64)[None, None] * (1.0 - frac[..., None])
-           + MISS_MISS.astype(np.float64)[None, None] * frac[..., None])
+    has = cov_b > 0
+    col = (MISS_HIT.astype(np.float64)[None, None] * blocks(hit_cov)[..., None]
+           + MISS_POKE.astype(np.float64)[None, None] * blocks(poke_cov)[..., None]
+           + MISS_MISS.astype(np.float64)[None, None] * blocks(loose_cov)[..., None])
+    col[has] /= cov_b[has][:, None]
     out[has] = np.clip(col[has], 0, 255).astype(np.uint8)
     return out
+
+
+def _face_miss_class(num_faces: int, tri_index, hit_mask, poke) -> np.ndarray:
+    """Per low-poly face miss class for the 3D overlay: 0 ok (no missed texel), 2 too
+    loose, 1 poke-through (too tight). Poke takes priority, so a face that pokes anywhere
+    shows as too-tight even if it also has loose misses."""
+    cls = np.zeros(num_faces, dtype=np.int64)
+    miss = ~hit_mask
+    loose = miss & ~poke
+    cls[np.unique(tri_index[loose])] = 2
+    cls[np.unique(tri_index[miss & poke])] = 1  # poke overrides loose
+    return cls
 
 
 # --- supersample downsample + island padding (stretch: bake quality) --------

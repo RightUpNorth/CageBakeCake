@@ -259,6 +259,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction("High Poly Wireframe", lambda: self._high_wire.toggle())
         view_menu.addAction("Toggle Normal Map", lambda: self._normal_map.toggle())
         view_menu.addAction("Toggle LP Normals", lambda: self._show_normals.toggle())
+        view_menu.addAction("Toggle Ray-miss Overlay", lambda: self._miss_overlay.toggle())
         view_menu.addSeparator()
         view_menu.addAction("Toggle Cage Points", lambda: self._cage_points.toggle())
         view_menu.addAction("Toggle Cage Wireframe", lambda: self._cage_wire.toggle())
@@ -398,6 +399,9 @@ class MainWindow(QMainWindow):
         self._show_normals = QCheckBox("Show LP normals")
         self._show_normals.toggled.connect(lambda v: self.editor.set_low_normals(v))
         f.addRow(self._show_normals)
+        self._miss_overlay = QCheckBox("Ray-miss overlay (3D)")
+        self._miss_overlay.toggled.connect(lambda v: self.editor.set_miss_overlay(v))
+        f.addRow(self._miss_overlay)
         self._cage_points = QCheckBox("Cage points")
         self._cage_points.toggled.connect(lambda v: self.editor.set_cage_points(v))
         f.addRow(self._cage_points)
@@ -813,7 +817,8 @@ class MainWindow(QMainWindow):
                    self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
-                   self._show_normals, self._cage_points, self._cage_wire,
+                   self._show_normals, self._miss_overlay,
+                   self._cage_points, self._cage_wire,
                    self._bake_w, self._bake_h, self._supersample, self._padding,
                    self._ao_samples, self._explode, self._name_match, self._mesh_list)
         for w in widgets:
@@ -845,6 +850,7 @@ class MainWindow(QMainWindow):
         self._high_wire.setEnabled(has_high)
         self._normal_map.setChecked(ed._normal_map_on)
         self._show_normals.setChecked(ed._normals_glyph_on)
+        self._miss_overlay.setChecked(ed._miss_overlay_on)
         self._cage_points.setChecked(True)   # cage_pts starts visible
         self._cage_wire.setChecked(False)
         self._bake_w.setCurrentText(str(ed._bake_size[0]))
