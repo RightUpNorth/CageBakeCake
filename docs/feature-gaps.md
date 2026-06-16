@@ -85,10 +85,15 @@ you when the bake went wrong.
   bake size / explode factor changed, supersampling is on, or most of the cage moved (then
   a full bake is cleaner). So iterating on one corner of a cage no longer pays for a whole
   map. Still open: refreshing the ray-miss map incrementally too.
-- **[med] More maps:** object/world-space normal, height/displacement, thickness, bent
-  normal, position, material/color ID. Several reuse the existing ray cast.
-- **[med] Output options:** 16-bit / EXR, flip-green (DirectX vs OpenGL), channel
-  packing, sRGB vs linear control.
+- **[med] More maps. (PARTLY DONE)** Object/world-space normal now bakes
+  (`bake.bake(..., space="object")` encodes the world hit normal directly, reusing the
+  cage-bounded cast); it feeds the recipe (object-space normal maps now produce data
+  instead of packing empty) and the bitmap viewer ("Obj Normal"). Still open:
+  height/displacement, thickness, bent normal, position, material/color ID.
+- **[med] Output options. (PARTLY DONE)** Flip-green (`bake.flip_green`, dock "Flip green
+  (DirectX)") inverts the normal map's G channel for the DirectX/OpenGL convention,
+  applied to the normal bake / re-bake and saved with the project; channel packing already
+  exists (the recipe). Still open: 16-bit / EXR output, sRGB-vs-linear control.
 - **[med] UDIM / multi-tile UV** support for assets that span more than one 0-1 tile.
 - **[low] Tangent-basis choice** (e.g. MikkTSpace) to match a target engine exactly.
 - **[low] Bake presets** (save a named bake configuration).

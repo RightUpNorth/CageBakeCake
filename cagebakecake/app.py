@@ -178,6 +178,7 @@ class CageEditor:
         self._baked_explode = 0.0
         self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
+        self._baked_obj_normal: np.ndarray | None = None  # last object-space normal bake
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
         self._face_miss: np.ndarray | None = None      # per-low-face miss class (0/1/2) for the 3D overlay
         self._miss_overlay_on = False
@@ -203,6 +204,7 @@ class CageEditor:
         self._padding = 0       # UV-island edge padding in texels (0 = none)
         self._ao_samples = 64   # hemisphere rays per texel for the AO bake
         self._explode = 0.0     # exploded-bake part separation factor (0 = bake in place)
+        self._flip_green = False  # invert normal-map green (OpenGL <-> DirectX)
         # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
         # links a low part and a high part that share a prim name (toggling one toggles both).
         self._part_vis: dict[tuple[str, int], bool] = {}
@@ -1226,6 +1228,7 @@ class CageEditor:
             padding=int(self._padding),
             ao_samples=int(self._ao_samples),
             explode=float(self._explode),
+            flip_green=bool(self._flip_green),
         )
         return st
 
@@ -1241,6 +1244,7 @@ class CageEditor:
         self.set_padding(st.get("padding", self._padding))
         self.set_ao_samples(st.get("ao_samples", self._ao_samples))
         self.set_explode(st.get("explode", self._explode))
+        self.set_flip_green(st.get("flip_green", self._flip_green))
         push, manual, skew, skew_map, matched = project.decode_edits(
             st, len(self.manual_delta))
         if push is not None:
@@ -1289,6 +1293,11 @@ class CageEditor:
         the scene centre by factor*(part centroid - centre), so neighbouring parts stop
         cross-projecting into each other. 0 bakes in place (dock slider)."""
         self._explode = max(0.0, float(factor))
+
+    def set_flip_green(self, on: bool) -> None:
+        """Flip the tangent-space normal map's green channel (OpenGL +Y <-> DirectX -Y).
+        Applied to the normal bake / re-bake; the dock checkbox drives it."""
+        self._flip_green = bool(on)
 
     def _exploded_geometry(self):
         """The (low_points, cage_points, high_points, ray_mesh) to bake from. With explode
@@ -1409,6 +1418,8 @@ class CageEditor:
             return
         # miss map = ray-miss / projection feedback; face_miss drives the 3D overlay.
         image, self._baked_miss, self._face_miss = result
+        if self._flip_green:
+            image = bake.flip_green(image)
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
         pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)
@@ -1424,6 +1435,29 @@ class CageEditor:
         self._bake_status(f"Baked -> {out}   [n] normal map  [l] low-poly shading"
                           if out else "Baked.   [n] normal map  [l] low-poly shading")
         self.pl.render()
+
+    def _bake_object_normal(self, out_path: str | None = None, write: bool = True,
+                            progress=None, should_cancel=None) -> None:
+        """Bake an object-space normal map (the world-space hit normal encoded directly)
+        to memory and optionally to disk. Shares the cage-bounded ray cast with the
+        tangent bake; `write=False` bakes to memory only (recipe baking)."""
+        if self.high is None or self._cached_low_uvs is None:
+            return
+        w, h = self._bake_size
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0]
+                           + "_objnormal.png" if write else None)
+        image = bake.bake(
+            low_p, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            cage_p, high_p, self._cached_high_tris,
+            np.asarray(self.high.point_normals, dtype=np.float64),
+            resolution=(w, h), out_path=out, firing_normals=self.normals,
+            supersample=self._supersample, padding=self._padding,
+            should_cancel=should_cancel, space="object", ray_mesh=ray_mesh,
+            progress=progress or (lambda m: print(f"[objnormal] {m}")),
+        )
+        if image is not None:
+            self._baked_obj_normal = image
 
     # --- threaded bake: pure compute inputs + main-thread apply -------------
     def bake_inputs(self, resolution=None) -> dict | None:
@@ -1467,6 +1501,8 @@ class CageEditor:
             self.pl.render()
             return False
         image, self._baked_miss, self._face_miss = result
+        if self._flip_green:
+            image = bake.flip_green(image)
         low_tris = self._cached_low_tris
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
         pp_uv[low_tris.reshape(-1)] = self._cached_low_uvs.reshape(-1, 2).astype(np.float32)
@@ -1543,13 +1579,17 @@ class CageEditor:
         faces = np.nonzero(dirty)[0]
         notify(f"re-baking {len(faces)}/{len(tris)} faces")
         low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
-        self._baked_image = bake.rebake_faces(
-            self._baked_image, low_p, tris, self.hard_normals, self._cached_low_uvs,
+        # rebake_faces encodes un-flipped tangent normals; if the stored map is flipped,
+        # un-flip it for compositing then re-flip the result (flip_green is its own inverse).
+        prev = bake.flip_green(self._baked_image) if self._flip_green else self._baked_image
+        out = bake.rebake_faces(
+            prev, low_p, tris, self.hard_normals, self._cached_low_uvs,
             cage_p, high_p, self._cached_high_tris,
             np.asarray(self.high.point_normals, dtype=np.float64), faces,
             resolution=(w, h), firing_normals=self.normals, ray_mesh=ray_mesh,
             progress=notify,
         )
+        self._baked_image = bake.flip_green(out) if self._flip_green else out
         self._baked_cage_points = self.cage.points.copy()
         self._normal_map_on = True
         self.set_low_style(True)
@@ -1568,10 +1608,17 @@ class CageEditor:
         """
         notify = progress or (lambda _m: None)
         kinds = {m.kind for m in rec.bake_maps}
+        spaces = {(m.kind, m.space) for m in rec.bake_maps}
         cancelled = lambda: bool(should_cancel and should_cancel())
 
-        if "normal" in kinds:
+        if ("normal", "tangent") in spaces or any(
+                m.kind == "normal" and m.space in (None, "tangent") for m in rec.bake_maps):
             self._bake(progress=progress, should_cancel=should_cancel, write=False)
+            if cancelled():
+                return None
+        if ("normal", "object") in spaces:
+            self._bake_object_normal(progress=progress, should_cancel=should_cancel,
+                                     write=False)
             if cancelled():
                 return None
         if "ao" in kinds:
@@ -1581,15 +1628,15 @@ class CageEditor:
         if "curv" in kinds and self._baked_image is not None:
             self._bake_curvature(write=False)
 
-        # Map each recipe bake map to its baked buffer (only bakeable kinds resolve;
-        # object-space normals are not produced by the tangent-space bake).
-        by_kind = {"normal": self._baked_image, "ao": self._baked_ao,
-                   "curv": self._baked_curv}
+        # Map each recipe bake map to its baked buffer (object-space normals resolve to
+        # the object bake, tangent to the tangent bake; non-bakeable kinds stay empty).
+        by_kind = {"ao": self._baked_ao, "curv": self._baked_curv}
         baked = {}
         for m in rec.bake_maps:
-            arr = by_kind.get(m.kind)
-            if m.kind == "normal" and m.space == "object":
-                arr = None
+            if m.kind == "normal":
+                arr = self._baked_obj_normal if m.space == "object" else self._baked_image
+            else:
+                arr = by_kind.get(m.kind)
             if arr is not None:
                 baked[m.id] = arr
 
@@ -1625,6 +1672,8 @@ class CageEditor:
             maps.append(("AO", self._baked_ao))
         if self._baked_curv is not None:
             maps.append(("Curvature", self._baked_curv))
+        if self._baked_obj_normal is not None:
+            maps.append(("Obj Normal", self._baked_obj_normal))
         if self._baked_miss is not None:
             maps.append(("Ray miss", self._baked_miss))
         for fname, img in self._packed_outputs.items():
