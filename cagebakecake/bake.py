@@ -595,6 +595,19 @@ def curvature_from_normal_map(normal_image: np.ndarray, strength: float = 1.0) -
     return _gray_to_rgb(gray)
 
 
+def diff_map(a: np.ndarray, b: np.ndarray, gain: float = 4.0) -> np.ndarray:
+    """A grayscale heatmap of the per-pixel difference between two same-size maps: the
+    mean absolute channel difference, amplified by `gain` and clipped. Black where the two
+    are identical, brighter where they diverge - for before/after comparison of two bakes.
+    Raises ValueError if the shapes differ."""
+    a = np.asarray(a)[..., :3].astype(np.float64)
+    b = np.asarray(b)[..., :3].astype(np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"diff needs same-size maps; got {a.shape} vs {b.shape}")
+    d = np.abs(a - b).mean(axis=2) * float(gain)
+    return _gray_to_rgb(np.clip(d / 255.0, 0.0, 1.0))
+
+
 def flip_green(image: np.ndarray) -> np.ndarray:
     """Invert the green channel of a normal map (G -> 255-G): converts between OpenGL
     (+Y up) and DirectX (-Y down) tangent-space conventions. Returns a new array."""

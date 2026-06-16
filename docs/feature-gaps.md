@@ -119,7 +119,10 @@ The app is almost entirely a 3D viewport; there is little 2D feedback.
   baked map when one exists (the bake is already in UV space, so this is a UV-space texture
   view with seams). Islands vs the checker show wasted UV space; the baked map under the
   wireframe shows coverage. Replaces the placeholder stand-in that mirrored the tray map.
-- **[med] Before/after split or difference view** for comparing a bake to the high poly.
+- **[med] Before/after difference view. (DONE)** The bitmap viewer gains "Pin ref" (snapshot
+  the current map as the 'before') and a "Diff" toggle that shows `bake.diff_map` - a
+  grayscale heatmap of the per-pixel difference (black where identical, brighter where they
+  diverge) - so two bakes can be compared. Same-size maps only (it warns otherwise).
 
 ## E. Import / format reach
 
