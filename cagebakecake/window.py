@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 from pyvistaqt import QtInteractor
-from qtpy.QtCore import QPoint, Qt
+from qtpy.QtCore import QObject, QPoint, Qt, QThread, Signal
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -39,7 +39,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import chrome, project, recipe, theme, uvlayout, win_chrome
+from . import bake, chrome, project, recipe, theme, uvlayout, win_chrome
 from .app import CageEditor
 from .imageview import ImageView
 from .widgets import (
@@ -57,6 +57,28 @@ _PROJECT_FILTER = "CageBakeCake project (*.cbcproj);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
 _EXPLODE_MAX = 2.0    # max exploded-bake separation factor (slider top)
 _BAKE_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384]  # normal-map width/height choices
+
+
+class _BakeWorker(QObject):
+    """Runs a pure-compute bake closure on a worker thread and reports back via signals.
+
+    `compute(emit)` is called on the thread - it must be pure (no Qt/VTK), taking a
+    progress callback. Its return value (or an exception) is delivered on `finished`,
+    handled on the main thread where the VTK/actor updates are safe."""
+
+    progress = Signal(str)
+    finished = Signal(object)
+
+    def __init__(self, compute):
+        super().__init__()
+        self._compute = compute
+
+    def run(self) -> None:
+        try:
+            result = self._compute(self.progress.emit)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the UI, not swallowed
+            result = exc
+        self.finished.emit(result)
 
 
 class MainWindow(QMainWindow):
@@ -83,7 +105,12 @@ class MainWindow(QMainWindow):
 
         self._interactor: QtInteractor | None = None
         self.editor: CageEditor | None = None
-        self._cancel = False  # set by the Cancel button, polled by the AO bake loop
+        self._cancel = False  # set by the Cancel button, polled by the bake loops
+        # Threaded bake state: the worker keeps the UI live during a ray cast.
+        self._bake_busy = False
+        self._bake_thread: QThread | None = None
+        self._bake_worker: _BakeWorker | None = None
+        self._closing = False
         # A saved editor state staged by Open Project, applied to the fresh editor the
         # next _rebuild creates (and then cleared). None on a plain mesh open.
         self._pending_editor_state: dict | None = None
@@ -1009,19 +1036,80 @@ class MainWindow(QMainWindow):
     def _cancel_bake(self) -> None:
         self._cancel = True
 
-    def _bake(self) -> None:
+    # --- threaded bake harness ----------------------------------------------
+    def _run_bake(self, compute, on_done, busy_msg: str) -> bool:
+        """Run `compute(emit)` (a pure ray-cast closure) on a worker thread, keeping the
+        UI live; call `on_done(result)` on the main thread when it finishes. `compute`
+        must not touch Qt/VTK. Returns False (and does nothing) if a bake is already
+        running - bakes do not overlap."""
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return False
+        self._bake_busy = True
         self._cancel = False
-        self._set_status("Baking (this can take a while)...")
-        QApplication.processEvents()
-        self.editor._bake(progress=self._progress, should_cancel=lambda: self._cancel)
-        # The bake switches the low poly to shaded + normal map; reflect that in the dock.
+        self._set_status(busy_msg)
+
+        thread = QThread()
+        worker = _BakeWorker(compute)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._set_status)  # queued to the main thread
+
+        def finish(result):
+            thread.quit()
+            thread.wait()
+            worker.deleteLater()
+            self._bake_busy = False
+            self._bake_thread = None
+            self._bake_worker = None
+            if not self._closing:
+                on_done(result)
+
+        worker.finished.connect(finish)
+        self._bake_thread = thread
+        self._bake_worker = worker
+        thread.start()
+        return True
+
+    def _mark_shaded_normal(self) -> None:
+        """Reflect the post-bake low-poly state (shaded + normal map) in the dock."""
         for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
             w.blockSignals(True)
             w.setChecked(checked)
             w.blockSignals(False)
-        self._set_status("Bake cancelled." if self._cancel
-                         else "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare.")
-        self._refresh_preview()
+
+    def _bake(self) -> None:
+        job = self.editor.bake_inputs()
+        if job is None:
+            self._set_status("Bake needs a high poly with UVs.")
+            return
+
+        def compute(emit):
+            return bake.bake(**job["kwargs"], progress=emit,
+                             should_cancel=lambda: self._cancel)
+
+        def done(result):
+            if isinstance(result, Exception):
+                self._set_status(f"Bake failed: {result}")
+                return
+            baked = self.editor.apply_bake_result(result, job)
+            self._mark_shaded_normal()
+            self._set_status(
+                "Baked. Toggle 'Normal map' / 'Low poly shaded' to compare." if baked
+                else "Bake cancelled.")
+            self._refresh_preview()
+
+        self._run_bake(compute, done, "Baking (this can take a while)...")
+
+    def closeEvent(self, event):
+        """Stop a running bake cleanly before closing so the worker thread is not
+        destroyed mid-run."""
+        self._closing = True
+        if self._bake_busy and self._bake_thread is not None:
+            self._cancel = True
+            self._bake_thread.quit()
+            self._bake_thread.wait()
+        super().closeEvent(event)
 
     def _lp_name(self) -> str:
         """The low-poly stem, for {LP} expansion in packing filenames."""
@@ -1037,6 +1125,9 @@ class MainWindow(QMainWindow):
     def _bake_recipe(self) -> None:
         """Bake the current recipe: every map it needs, packed into its output PNGs
         next to the low poly. The primary dock action."""
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
         self._cancel = False
         self._set_status("Baking recipe (this can take a while)...")
         QApplication.processEvents()
@@ -1056,14 +1147,29 @@ class MainWindow(QMainWindow):
         self._refresh_preview()
 
     def _bake_ao(self) -> None:
-        self._cancel = False
-        self._set_status("Baking AO (this can take a while)...")
-        QApplication.processEvents()
-        self.editor._bake_ao(progress=self._progress, should_cancel=lambda: self._cancel)
-        self._set_status("AO cancelled." if self._cancel else "AO baked (next to the low poly).")
-        self._refresh_preview()
+        job = self.editor.ao_inputs()
+        if job is None:
+            self._set_status("AO needs a high poly with UVs.")
+            return
+
+        def compute(emit):
+            return bake.bake_ao(**job["kwargs"], progress=emit,
+                                should_cancel=lambda: self._cancel)
+
+        def done(result):
+            if isinstance(result, Exception):
+                self._set_status(f"AO failed: {result}")
+                return
+            ok = self.editor.apply_ao_result(result, job)
+            self._set_status("AO baked (next to the low poly)." if ok else "AO cancelled.")
+            self._refresh_preview()
+
+        self._run_bake(compute, done, "Baking AO (this can take a while)...")
 
     def _bake_curvature(self) -> None:
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
         self.editor._bake_curvature()
         self._set_status("Curvature baked (from the last normal-map bake).")
         self._refresh_preview()
@@ -1071,13 +1177,13 @@ class MainWindow(QMainWindow):
     def _rebake(self) -> None:
         """Incremental re-bake of just the changed cage region (falls back to a full
         bake when that is not possible - see CageEditor.rebake)."""
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
         self._set_status("Re-baking changed region...")
         QApplication.processEvents()
         self.editor.rebake(progress=self._progress)
-        for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
-            w.blockSignals(True)
-            w.setChecked(checked)
-            w.blockSignals(False)
+        self._mark_shaded_normal()
         self._refresh_preview()
 
     def _open_low(self) -> None:
@@ -1171,6 +1277,9 @@ class MainWindow(QMainWindow):
             self._mood_pick.set_current_index(theme.MOODS.index(mood))
 
     def _export(self) -> None:
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
         path, _ = QFileDialog.getSaveFileName(self, "Export Normal Map", "", "PNG (*.png)")
         if not path:
             return

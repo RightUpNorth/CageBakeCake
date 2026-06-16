@@ -1425,6 +1425,95 @@ class CageEditor:
                           if out else "Baked.   [n] normal map  [l] low-poly shading")
         self.pl.render()
 
+    # --- threaded bake: pure compute inputs + main-thread apply -------------
+    def bake_inputs(self, resolution=None) -> dict | None:
+        """Snapshot everything a normal bake needs (on the calling/main thread) so the
+        heavy `bake.bake` ray cast can run on a worker thread without racing live cage
+        edits. Returns the job dict, or None if the bake cannot run (no high / no UVs).
+        Arrays the user can mutate while a bake runs (cage / firing normals) are copied;
+        the immutable, possibly-huge high poly and its BVH are passed by reference. Pair
+        with `apply_bake_result` on the main thread."""
+        if self.high is None or self._cached_low_uvs is None:
+            return None
+        res = resolution if resolution is not None else self._bake_size
+        w, h = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png"
+        kwargs = dict(
+            low_points=np.array(low_p, dtype=np.float64),
+            low_tris=self._cached_low_tris,
+            low_normals=self.hard_normals,
+            low_uvs=self._cached_low_uvs,
+            cage_points=np.array(cage_p, dtype=np.float64),
+            high_points=high_p,
+            high_tris=self._cached_high_tris,
+            high_normals=np.asarray(self.high.point_normals, dtype=np.float64),
+            resolution=(w, h), out_path=out,
+            firing_normals=np.array(self.normals, dtype=np.float64),
+            supersample=self._supersample, padding=self._padding,
+            return_miss=True, return_face_miss=True, ray_mesh=ray_mesh,
+        )
+        return {"kwargs": kwargs, "out": out, "size": (w, h),
+                "cage_snapshot": np.array(self.cage.points, dtype=np.float64),
+                "explode": self._explode}
+
+    def apply_bake_result(self, result, job: dict) -> bool:
+        """Apply a finished normal-bake result (from `bake.bake`) on the main thread:
+        store the maps, snapshot for incremental re-bake, switch the low poly to shaded +
+        normal map, refresh the 3D miss overlay, render. Returns True if a map was produced,
+        False if the bake was cancelled (result is None)."""
+        if result is None:
+            self._bake_status("Bake cancelled.")
+            self.pl.render()
+            return False
+        image, self._baked_miss, self._face_miss = result
+        low_tris = self._cached_low_tris
+        pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
+        pp_uv[low_tris.reshape(-1)] = self._cached_low_uvs.reshape(-1, 2).astype(np.float32)
+        self._baked_image = image
+        self._baked_uv = pp_uv
+        self._baked_cage_points = job["cage_snapshot"]
+        self._baked_explode = job["explode"]
+        self._build_miss_overlay()
+        self._normal_map_on = True
+        self.set_low_style(True)
+        self._bake_status(f"Baked -> {job['out']}")
+        self.pl.render()
+        return True
+
+    def ao_inputs(self, resolution=None) -> dict | None:
+        """Snapshot inputs for a threaded AO bake (`bake.bake_ao`); None if it cannot run.
+        See `bake_inputs`."""
+        if self.high is None or self._cached_low_uvs is None:
+            return None
+        res = resolution if resolution is not None else self._bake_size
+        w, h = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
+        low_p, _cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png"
+        kwargs = dict(
+            low_points=np.array(low_p, dtype=np.float64),
+            low_tris=self._cached_low_tris,
+            low_normals=self.hard_normals,
+            low_uvs=self._cached_low_uvs,
+            high_points=high_p,
+            high_tris=self._cached_high_tris,
+            resolution=(w, h), samples=self._ao_samples, padding=self._padding,
+            out_path=out, ray_mesh=ray_mesh,
+        )
+        return {"kwargs": kwargs, "out": out}
+
+    def apply_ao_result(self, image, job: dict) -> bool:
+        """Apply a finished AO result on the main thread. Returns True if produced, False
+        if cancelled (image is None)."""
+        if image is None:
+            self._bake_status("AO cancelled.")
+            self.pl.render()
+            return False
+        self._baked_ao = image
+        self._bake_status(f"Baked AO -> {job['out']}")
+        self.pl.render()
+        return True
+
     def rebake(self, progress=None) -> None:
         """Additive / incremental re-bake: re-cast only the cage region that changed since
         the last full normal bake and composite it over the previous map. Falls back to a
