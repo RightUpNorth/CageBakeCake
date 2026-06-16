@@ -182,7 +182,9 @@ def viewport_colors(key: str) -> dict:
         "cage": p["accent"],
         "cage_points": p["accent2"],
         "cage_wire": p["accent"],
-        "sky_top": p["menuhover"],
+        # A visible vertical sky: light panel up top falling to the darker desktop
+        # base (menuhover/desktop were nearly identical and read as a flat fill).
+        "sky_top": p["panel"],
         "sky_bottom": p["desktop"],
     }
 
@@ -312,14 +314,28 @@ QToolButton {{
 QToolButton:hover {{ border-color: {accent}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
 
-/* Title strip (the design's title bar, recreated as the top toolbar). */
-QToolBar#titlebar {{ background: {titlebar}; border: none; padding: 4px 12px; spacing: 8px; }}
+/* Title bar (the design's 48px themed bar - the real, frameless title bar). */
+QWidget#chrome {{ background: {titlebar}; }}
+QWidget#titlebar {{ background: {titlebar}; }}
 QLabel#appmark {{ background: {accent}; border-radius: 6px; }}
 QLabel#apptitle {{ color: {titletext}; font-family: "Bricolage Grotesque","Segoe UI",sans-serif;
     font-weight: 700; font-size: 15px; }}
 QLabel#assetname {{ color: {inksoft}; font-size: 12px; }}
 QLabel#themelabel {{ color: {inksoft}; font-size: 9px; font-weight: 700; }}
 QLabel#caption {{ color: {inkfaint}; font-size: 10px; }}
+
+/* Functional window buttons (minimize / maximize / close). */
+QToolButton#winmin, QToolButton#winmax, QToolButton#winclose {{
+    border: none; border-radius: 6px; padding: 0; }}
+QToolButton#winmin {{ background: {accent2}; }}
+QToolButton#winmax {{ background: {good}; }}
+QToolButton#winclose {{ background: {accent}; }}
+QToolButton#winmin:hover, QToolButton#winmax:hover, QToolButton#winclose:hover {{
+    border: 1px solid {titletext}; }}
+
+/* 2D UV pane (design Region A, '2d'/'split'). */
+QWidget#uvpane {{ background: {panel2}; border-left: 1px solid {border}; }}
+QLabel#uvcaption {{ color: {inksoft}; background: {panel2}; font-size: 10px; padding: 4px; }}
 
 /* Segmented control (Direction / Mood). */
 QWidget#segmented {{ background: {inset}; border-radius: 9px; }}

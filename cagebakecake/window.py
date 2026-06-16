@@ -11,10 +11,11 @@ the headless / screenshot route and is unaffected.
 from __future__ import annotations
 
 import os
+import sys
 
 import numpy as np
 from pyvistaqt import QtInteractor
-from qtpy.QtCore import Qt
+from qtpy.QtCore import QPoint, Qt
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,6 +28,7 @@ from qtpy.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenuBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -37,7 +39,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import chrome, theme, win_chrome
 from .app import CageEditor
 from .imageview import ImageView
 from .widgets import (
@@ -68,7 +70,8 @@ class MainWindow(QMainWindow):
     ):
         super().__init__()
         self.setWindowTitle("CageBakeCake")
-        self.resize(1280, 800)
+        self.resize(1340, 856)  # design max content size
+        self.setMinimumSize(900, 600)
 
         self._low_path = low_path
         self._high_path = high_path
@@ -79,72 +82,154 @@ class MainWindow(QMainWindow):
         self._interactor: QtInteractor | None = None
         self.editor: CageEditor | None = None
         self._cancel = False  # set by the Cancel button, polled by the AO bake loop
+        self._title_bar: QWidget | None = None
+        self._native_chrome = False  # win32 native frameless (Aero Snap kept)
 
         # Theme axes (direction + mood) drive the 6-palette matrix; see theme.py.
         self._direction = theme.DEFAULT_DIRECTION
         self._mood = theme.DEFAULT_MOOD
 
-        self._build_menu()
-        self._build_toolbar()
+        # Go frameless so the design's single 48px themed title bar is the real one.
+        # On win32 we keep the native window (resize/snap/shadow) and only strip the
+        # title bar via WM_NCCALCSIZE; elsewhere we use FramelessWindowHint + grips.
+        if sys.platform != "win32":
+            self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+
+        self._build_chrome()  # title bar (48px) + menu bar (36px) at the very top
         self._build_dock()
         self._build_central()
         self._build_statusbar()
         self._rebuild()
         self._apply_theme()
+        self._enable_frameless()
 
     # --- construction -------------------------------------------------------
-    def _build_toolbar(self) -> None:
-        """The design's title bar, recreated as a themed top toolbar (the OS title bar is
-        native): app mark + title + asset name on the left; the Direction/Mood segmented
-        toggles, the viewport-mode dropdown, and three window dots on the right."""
-        bar = self.addToolBar("Title")
+    def _build_chrome(self) -> None:
+        """Stack the title bar (48px) above the menu bar (36px) in a single widget set
+        as the window's menu widget, so both span the full width above the dock - the
+        design's top-level order (title bar, then menu bar)."""
+        top = QWidget()
+        top.setObjectName("chrome")
+        lay = QVBoxLayout(top)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._build_titlebar())
+        lay.addWidget(self._build_menu())
+        self.setMenuWidget(top)
+
+    def _build_titlebar(self) -> QWidget:
+        """The design's 48px title bar: app mark (cake) + title + asset name on the
+        left; the viewport-mode dropdown, the Direction/Mood toggles, and three
+        functional window buttons (minimize / maximize / close) on the right. The bar
+        itself is a DragBar so dragging it moves the (frameless) window."""
+        bar = chrome.DragBar(self)
         bar.setObjectName("titlebar")
-        bar.setMovable(False)
+        bar.setFixedHeight(48)
+        self._title_bar = bar
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 0, 10, 0)
+        h.setSpacing(8)
 
         mark = QLabel()
         mark.setObjectName("appmark")
-        mark.setFixedSize(22, 22)
+        mark.setFixedSize(24, 24)
+        mark.setAlignment(Qt.AlignCenter)
+        self._appmark = mark
+        self._paint_appmark()
         title = QLabel("CageBakeCake")
         title.setObjectName("apptitle")
         self._asset_label = QLabel("")
         self._asset_label.setObjectName("assetname")
-        bar.addWidget(mark)
-        bar.addWidget(title)
-        bar.addWidget(self._asset_label)
-
-        spacer = QWidget()
-        spacer.setStyleSheet("background: transparent;")
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        bar.addWidget(spacer)
+        h.addWidget(mark)
+        h.addWidget(title)
+        h.addWidget(self._asset_label)
+        h.addStretch(1)
 
         self._viewport_mode = QComboBox()
         self._viewport_mode.addItems(["3D", "3D + 2D", "2D"])
         self._viewport_mode.setCurrentText("3D + 2D")
         self._viewport_mode.currentTextChanged.connect(lambda _t: self._apply_viewport_mode())
-        bar.addWidget(self._viewport_mode)
+        h.addWidget(self._viewport_mode)
 
         theme_label = QLabel("THEME")
         theme_label.setObjectName("themelabel")
-        bar.addWidget(theme_label)
+        h.addWidget(theme_label)
         self._direction_pick = SegmentedControl(["Patisserie", "Chocolatier"])  # A, B
         self._direction_pick.changed.connect(self._on_direction)
-        bar.addWidget(self._direction_pick)
+        h.addWidget(self._direction_pick)
         self._mood_pick = SegmentedControl(["Light", "Neutral", "Dark"])
         self._mood_pick.changed.connect(self._on_mood)
-        bar.addWidget(self._mood_pick)
+        h.addWidget(self._mood_pick)
 
+        # Three functional window buttons (the design's faux dots, made real).
         dots = QWidget()
         dlay = QHBoxLayout(dots)
         dlay.setContentsMargins(8, 0, 0, 0)
-        dlay.setSpacing(5)
-        for i in range(3):
-            d = QLabel()
-            d.setProperty("dot", "on" if i == 2 else "off")
+        dlay.setSpacing(7)
+        for name, slot in (("winmin", self.showMinimized),
+                           ("winmax", self._toggle_max),
+                           ("winclose", self.close)):
+            d = QToolButton()
+            d.setObjectName(name)
+            d.setFixedSize(13, 13)
+            d.setCursor(Qt.PointingHandCursor)
+            d.clicked.connect(slot)
             dlay.addWidget(d)
-        bar.addWidget(dots)
+        h.addWidget(dots)
+        return bar
 
-    def _build_menu(self) -> None:
-        bar = self.menuBar()
+    def _toggle_max(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def _paint_appmark(self) -> None:
+        """(Re)paint the cake app-mark in the current palette's on-accent ink."""
+        ink = theme.active()["accent-ink"]
+        self._appmark.setPixmap(chrome.cake_icon(18, ink))
+
+    # --- frameless window plumbing ------------------------------------------
+    def _enable_frameless(self) -> None:
+        """Apply native borderless chrome on win32 (keeps Aero Snap/resize/shadow);
+        fall back to portable Qt resize grips if that fails or off-Windows."""
+        if sys.platform == "win32":
+            # Set the flag *before* enable(): its frame-change triggers the
+            # WM_NCCALCSIZE that nativeEvent must handle to strip the title bar.
+            self._native_chrome = True
+            if win_chrome.enable(self):
+                return
+            self._native_chrome = False
+            # native path failed: become frameless the portable way instead
+            self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        chrome.install_resize_grips(self)
+
+    def nativeEvent(self, event_type, message):
+        """Forward non-client messages to the win32 chrome so the borderless window
+        still resizes/snaps/drags natively."""
+        if self._native_chrome and bytes(event_type) == b"windows_generic_MSG":
+            result = win_chrome.handle(self, message, self._is_caption)
+            if result is not None:
+                return result
+        return super().nativeEvent(event_type, message)
+
+    def _is_caption(self, x: float, y: float) -> bool:
+        """Is the window-local point (device-independent px) in the draggable title-bar
+        region? True over empty bar/labels, False over the controls so they stay
+        clickable."""
+        tb = self._title_bar
+        if tb is None:
+            return False
+        origin = tb.mapTo(self, QPoint(0, 0))
+        local = QPoint(int(x) - origin.x(), int(y) - origin.y())
+        if not tb.rect().contains(local):
+            return False
+        child = tb.childAt(local)
+        return child is None or isinstance(child, QLabel)
+
+    def _build_menu(self) -> QMenuBar:
+        bar = QMenuBar()
+        bar.setFixedHeight(36)
 
         file_menu = bar.addMenu("&File")
         file_menu.addAction("Open Low Poly...", self._open_low)
@@ -193,6 +278,7 @@ class MainWindow(QMainWindow):
         caption = QLabel("USD · PySide6 · headless math  ")
         caption.setObjectName("caption")
         bar.setCornerWidget(caption, Qt.TopRightCorner)
+        return bar
 
     def _build_dock(self) -> None:
         """The controls dock, grouped into the design's sections (Shape the Cage /
@@ -203,6 +289,7 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         container = QWidget()
+        container.setFixedWidth(376)  # design: fixed-width controls dock
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -421,13 +508,40 @@ class MainWindow(QMainWindow):
         self._on_recipe_change(self._recipe_panel.recipe())  # seed the button subtitle
 
     def _build_central(self) -> None:
-        """The central area is a vertical splitter matching the design: the 3D viewport
-        fills the top, the 2D Baked Maps tray sits below it. The viewport (QtInteractor)
-        is inserted at the top in _rebuild; the Viewport dropdown toggles each pane."""
+        """The design's body: a viewport row (3D | 2D side by side) over a separate
+        Baked Maps tray. The viewport row is a horizontal splitter so 'Split (3D + 2D)'
+        divides left/right; the QtInteractor is inserted at its left in _rebuild and the
+        2D UV pane sits at its right. The Baked Maps tray is its own bottom strip,
+        independent of the viewport mode."""
+        self._viewport_split = QSplitter(Qt.Horizontal)
+        self._uv_pane = self._build_uv_pane()
+        self._viewport_split.addWidget(self._uv_pane)  # 2D at index 0; 3D inserted left
+        # The QtInteractor is inserted at index 0 (left of the 2D pane) in _rebuild.
+
         self._splitter = QSplitter(Qt.Vertical)
-        self._splitter.addWidget(self._build_preview_panel())  # the bottom tray for now
-        # The QtInteractor is inserted at index 0 (top) in _rebuild.
+        self._splitter.addWidget(self._viewport_split)
+        self._splitter.addWidget(self._build_preview_panel())  # Baked Maps tray
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
         self.setCentralWidget(self._splitter)
+
+    def _build_uv_pane(self) -> QWidget:
+        """The 2D pane (design Region A, '2d'/'split'): a checkerboard UV background
+        with the current baked map laid over it and a file/channel caption pill. A
+        stand-in for the real UV viewport - it shows the live baked map for now."""
+        pane = QWidget()
+        pane.setObjectName("uvpane")
+        lay = QVBoxLayout(pane)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._uv_view = ImageView()  # already paints the checkerboard UV background
+        lay.addWidget(self._uv_view, 1)
+        cap = QLabel("UV preview")
+        cap.setObjectName("uvcaption")
+        cap.setAlignment(Qt.AlignCenter)
+        lay.addWidget(cap)
+        self._uv_caption = cap
+        return pane
 
     def _build_preview_panel(self) -> QWidget:
         """The Baked Maps tray (the design's Region B): a header (title + size + Hide),
@@ -444,14 +558,21 @@ class MainWindow(QMainWindow):
         ttl.setObjectName("trayTitle")
         self._tray_size = QLabel("no bake yet")
         self._tray_size.setObjectName("traySize")
-        hide = QPushButton("Hide")
-        hide.setObjectName("linkSoft")
-        hide.clicked.connect(lambda: self._viewport_mode.setCurrentText("3D"))
+        self._tray_hide = QPushButton("Hide")
+        self._tray_hide.setObjectName("linkSoft")
+        self._tray_hide.clicked.connect(self._toggle_tray)
         header.addWidget(ttl)
         header.addWidget(self._tray_size)
         header.addStretch(1)
-        header.addWidget(hide)
+        header.addWidget(self._tray_hide)
         lay.addLayout(header)
+
+        # Everything below the header collapses together when the tray is hidden.
+        self._tray_body = QWidget()
+        body = QVBoxLayout(self._tray_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+        lay.addWidget(self._tray_body, 1)
 
         # Quick tabs for the three core maps (pills); the full list is the footer dropdown.
         tabs = QHBoxLayout()
@@ -465,10 +586,10 @@ class MainWindow(QMainWindow):
             tabs.addWidget(b)
             self._tray_tabs.append(b)
         tabs.addStretch(1)
-        lay.addLayout(tabs)
+        body.addLayout(tabs)
 
         self._preview = ImageView()
-        lay.addWidget(self._preview, 1)
+        body.addWidget(self._preview, 1)
 
         footer = QHBoxLayout()
         footer.setSpacing(6)
@@ -495,11 +616,21 @@ class MainWindow(QMainWindow):
         footer.addWidget(fit_btn)
         footer.addWidget(zoom_in)
         footer.addWidget(export_btn)
-        lay.addLayout(footer)
+        body.addLayout(footer)
 
         self._preview_maps: list[tuple[str, object]] = []
         self._preview_panel = panel
         return panel
+
+    def _toggle_tray(self) -> None:
+        """Collapse the Baked Maps tray to just its header (design's 'Show baked maps'
+        bar) or restore it. Only the tray height changes; the viewport is untouched."""
+        collapsed = self._tray_body.isVisible()
+        self._tray_body.setVisible(not collapsed)
+        self._tray_hide.setText("Show" if collapsed else "Hide")
+        total = sum(self._splitter.sizes())
+        tray = 34 if collapsed else 178
+        self._splitter.setSizes([total - tray, tray])
 
     def _select_map_by_name(self, name: str) -> None:
         """Tray tab: show the named map if it has been baked."""
@@ -535,18 +666,16 @@ class MainWindow(QMainWindow):
             self._set_status(f"Wrote {path}")
 
     def _apply_viewport_mode(self) -> None:
-        """Show the 2D pane, the 3D pane, or both per the Viewport dropdown; an equal
-        split when both are visible."""
+        """Show the 2D pane, the 3D pane, or both side by side per the Viewport
+        dropdown. The Baked Maps tray is independent (its own Hide/Show)."""
         mode = self._viewport_mode.currentText()
         show_2d = mode in ("2D", "3D + 2D")
         show_3d = mode in ("3D", "3D + 2D")
-        self._preview_panel.setVisible(show_2d)
+        self._uv_pane.setVisible(show_2d)
         if self._interactor is not None:
             self._interactor.setVisible(show_3d)
         if show_2d and show_3d:
-            # Viewport dominant on top, the Baked Maps tray a shorter strip below it
-            # (~3:1), matching the design's layout.
-            self._splitter.setSizes([3_000_000, 1_000_000])
+            self._viewport_split.setSizes([1_000_000, 1_000_000])  # equal left/right
         if hasattr(self, "_status_view"):
             self._refresh_status_meta()
 
@@ -565,6 +694,8 @@ class MainWindow(QMainWindow):
             f"{w} x {h} · {ss}x SS" if self._preview_maps else "no bake yet")
         if not self._preview_maps:
             self._preview.clear()
+            self._uv_view.clear()
+            self._uv_caption.setText("UV preview - bake a map to see it here")
             return
         names = [name for name, _img in self._preview_maps]
         # Keep the user's current pick if it still exists, else show the last-baked map.
@@ -577,7 +708,11 @@ class MainWindow(QMainWindow):
 
     def _show_preview(self, idx: int) -> None:
         if 0 <= idx < len(self._preview_maps):
-            self._preview.set_image(self._isolated(self._preview_maps[idx][1]))
+            name, img = self._preview_maps[idx]
+            self._preview.set_image(self._isolated(img))
+            # Mirror the selected map into the 2D UV pane (stand-in for the UV view).
+            self._uv_view.set_image(self._isolated(img))
+            self._uv_caption.setText(f"{name}  ·  {self._iso.currentText()}")
 
     @staticmethod
     def _size_combo() -> QComboBox:
@@ -603,7 +738,10 @@ class MainWindow(QMainWindow):
         if old is not None:
             old.setParent(None)
             old.close()
-        self._splitter.insertWidget(0, self._interactor)  # top pane = 3D viewport
+        self._viewport_split.insertWidget(0, self._interactor)  # 3D at left of the 2D pane
+        self._viewport_split.setStretchFactor(0, 1)
+        self._viewport_split.setStretchFactor(1, 1)
+        self._splitter.setSizes([678, 178])  # design: ~178px Baked Maps tray
 
         self.editor = CageEditor(
             self._low_path,
@@ -698,6 +836,8 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(theme.build_qss(key))
         if self.editor is not None:
             self.editor.set_theme(key)
+        if hasattr(self, "_appmark"):
+            self._paint_appmark()  # recolor the cake mark for the new palette
         if hasattr(self, "_status_right"):
             self._refresh_status_meta()
         self.update()  # repaint the custom toggle switches for the new palette
@@ -859,6 +999,7 @@ class MainWindow(QMainWindow):
         the current view on the left; the active theme mood label on the right."""
         sb = self.statusBar()
         sb.setSizeGripEnabled(False)
+        sb.setFixedHeight(30)
         self._status_dot = QLabel()
         self._status_dot.setObjectName("statusdot")
         self._status_main = QLabel("Ready")
