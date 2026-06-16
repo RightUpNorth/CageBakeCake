@@ -149,6 +149,14 @@ def _encode_tangent_space(
     return np.clip((local * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
 
 
+def _encode_object_space(world_normals: np.ndarray) -> np.ndarray:
+    """Encode world/object-space hit normals straight to RGB ((n*0.5+0.5)*255), with no
+    tangent transform. An object-space normal map: valid only while the mesh keeps its
+    baked orientation, but free of tangent-basis mismatch."""
+    n = world_normals / (np.linalg.norm(world_normals, axis=1, keepdims=True) + 1e-12)
+    return np.clip((n * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
+
+
 # --- the bake (Phases 7.1-7.3) ---------------------------------------------
 def bake(
     low_points: np.ndarray,
@@ -168,6 +176,7 @@ def bake(
     should_cancel=None,
     return_miss: bool = False,
     return_face_miss: bool = False,
+    space: str = "tangent",
     ray_mesh=None,
 ) -> "np.ndarray | tuple | None":
     """Bake a tangent-space normal map; return the (H,W,3) uint8 buffer.
@@ -183,6 +192,9 @@ def bake(
     `padding` >= 0 bleeds the baked colours that many texels past the UV-island edges
     into the background, so mip-mapping does not pull the flat background across seams
     (use a large value to flood-fill the whole background).
+
+    `space` selects the encoding: "tangent" (the default tangent-space map) or "object"
+    (the world-space hit normal encoded directly, no tangent transform).
 
     `low_normals` is the low poly's shading normal - the frame the high-poly normal is
     encoded into (the normal the engine interpolates), and it must be the hard normals
@@ -271,14 +283,18 @@ def bake(
 
     # Per-triangle tangent basis, expanded to the covered texels. The frame normal is the
     # shading normal (not the firing direction), so skew does not distort the encoded map.
-    tri_pos = low_points[low_tris]  # (F,3,3)
-    tan, bit = _per_triangle_tangent(tri_pos, low_uvs)
-    rgb = _encode_tangent_space(
-        hit_normals[hit_mask],
-        tan[tri_index][hit_mask],
-        bit[tri_index][hit_mask],
-        shade[hit_mask],
-    )
+    # Object space skips the tangent transform and encodes the world normal directly.
+    if space == "object":
+        rgb = _encode_object_space(hit_normals[hit_mask])
+    else:
+        tri_pos = low_points[low_tris]  # (F,3,3)
+        tan, bit = _per_triangle_tangent(tri_pos, low_uvs)
+        rgb = _encode_tangent_space(
+            hit_normals[hit_mask],
+            tan[tri_index][hit_mask],
+            bit[tri_index][hit_mask],
+            shade[hit_mask],
+        )
     hit_yx = yx[hit_mask]
     image[hit_yx[:, 0], hit_yx[:, 1]] = rgb
     notify(f"{int(hit_mask.sum())}/{len(yx)} texels hit")
@@ -577,6 +593,14 @@ def curvature_from_normal_map(normal_image: np.ndarray, strength: float = 1.0) -
     div = ndimage.sobel(nx, axis=1) + ndimage.sobel(ny, axis=0)
     gray = np.clip(0.5 + div * strength * 0.5, 0.0, 1.0)
     return _gray_to_rgb(gray)
+
+
+def flip_green(image: np.ndarray) -> np.ndarray:
+    """Invert the green channel of a normal map (G -> 255-G): converts between OpenGL
+    (+Y up) and DirectX (-Y down) tangent-space conventions. Returns a new array."""
+    out = np.array(image, dtype=np.uint8, copy=True)
+    out[..., 1] = 255 - out[..., 1]
+    return out
 
 
 def pack_outputs(baked: dict, recipe, lp_name: str) -> dict:

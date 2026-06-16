@@ -492,6 +492,9 @@ class MainWindow(QMainWindow):
         self._explode_label = QLabel("-")
         f.addRow(_slider_field("Explode bake (0 = in place)", self._explode,
                                self._explode_label))
+        self._flip_green = QCheckBox("Flip green (DirectX)")
+        self._flip_green.toggled.connect(lambda v: self.editor.set_flip_green(v))
+        f.addRow(self._flip_green)
         # Individual (per-type) bakes, kept available alongside the packed recipe bake.
         indiv = QGridLayout()
         for col, (text, slot) in enumerate((
@@ -864,7 +867,8 @@ class MainWindow(QMainWindow):
                    self._show_normals, self._miss_overlay,
                    self._cage_points, self._cage_wire,
                    self._bake_w, self._bake_h, self._supersample, self._padding,
-                   self._ao_samples, self._explode, self._name_match, self._mesh_list)
+                   self._ao_samples, self._explode, self._flip_green,
+                   self._name_match, self._mesh_list)
         for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
@@ -904,6 +908,7 @@ class MainWindow(QMainWindow):
         self._ao_samples.setCurrentText(str(ed._ao_samples))
         self._explode.setValue(round(ed._explode / _EXPLODE_MAX * _SLIDER_STEPS))
         self._explode_label.setText(f"{ed._explode:.2f}")
+        self._flip_green.setChecked(ed._flip_green)
         self._name_match.setChecked(ed._name_match)
         self._mesh_list.clear()
         for group, idx, label, visible in ed.meshes():
