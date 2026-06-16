@@ -132,8 +132,15 @@ two hotspots, both now addressed:
 
 Still open:
 
-- **[med] Threaded bake.** The bake runs on the UI thread (kept responsive by pumping
-  events); a worker thread would keep the UI fully live and allow baking while editing.
+- **[med] Threaded bake. (DONE)** The normal and AO bakes now run their ray cast on a
+  worker thread (`window._BakeWorker` on a `QThread`), so the viewport stays fully live -
+  no more `processEvents` pumping. `CageEditor.bake_inputs` / `ao_inputs` snapshot the pure
+  arguments on the main thread (copying the cage / firing normals so a concurrent edit
+  can't corrupt a running bake; the immutable high poly + BVH pass by reference);
+  `bake.bake` / `bake_ao` run on the thread; `apply_bake_result` / `apply_ao_result` do the
+  VTK/actor updates back on the main thread. Bakes don't overlap (a busy guard), and a
+  close mid-bake cancels and joins the worker. The recipe pack and Export stay synchronous
+  (a deliberate one-shot), and the standalone Plotter path keeps the original `_bake`.
 - **[low] Large-mesh viewport handling** (LOD / decimated display for very dense high
   polys) - the high poly is ~12 GB resident at 6.5M points, so very dense assets will
   still pressure memory and render cost.
