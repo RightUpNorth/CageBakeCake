@@ -103,8 +103,9 @@ you when the bake went wrong.
   along the normal) and world position (`bake.bake_position` - hit position over the high
   bbox) all bake now, reusing the cage-bounded cast (height/position via a shared
   per-texel-geometry helper + a location cast). All three feed the recipe (BAKEABLE_KINDS),
-  the batch/CLI baker, the Bake menu and the bitmap viewer. Still open: thickness, bent
-  normal, material/color ID.
+  the batch/CLI baker, the Bake menu and the bitmap viewer. Thickness too
+  (`bake.bake_thickness` - inward distance to the far wall, for translucency masks). Still
+  open: bent normal, material/color ID.
 - **[med] Output options. (PARTLY DONE)** Flip-green (`bake.flip_green`, dock "Flip green
   (DirectX)") inverts the normal map's G channel for the DirectX/OpenGL convention,
   applied to the normal bake / re-bake and saved with the project; channel packing already

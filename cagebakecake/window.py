@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
         bake_menu.addAction("Bake curvature", self._bake_curvature)
         bake_menu.addAction("Bake height", self._bake_height)
         bake_menu.addAction("Bake position", self._bake_position)
+        bake_menu.addAction("Bake thickness", self._bake_thickness)
         bake_menu.addAction("Cancel bake", self._cancel_bake)
 
         help_menu = bar.addMenu("&Help")
@@ -1295,6 +1296,16 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         self.editor._bake_position(progress=self._progress)
         self._set_status("Position baked (next to the low poly).")
+        self._refresh_preview()
+
+    def _bake_thickness(self) -> None:
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
+        self._set_status("Baking thickness...")
+        QApplication.processEvents()
+        self.editor._bake_thickness(progress=self._progress)
+        self._set_status("Thickness baked (next to the low poly).")
         self._refresh_preview()
 
     def _rebake(self) -> None:
