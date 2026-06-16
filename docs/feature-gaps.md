@@ -101,8 +101,12 @@ The app is almost entirely a 3D viewport; there is little 2D feedback.
   the last baked map with a Normal / AO / Curvature dropdown and wheel-zoom / drag-pan;
   `CageEditor.baked_maps()` keeps all three in memory and the dock refreshes after each
   bake. Channel isolation is not yet implemented (possible follow-up).
-- **[high] UV layout view.** Show the low poly's UV islands (and overlay the bake / ray
-  coverage), so the artist can see seams, wasted space, and uncovered islands.
+- **[high] UV layout view. (DONE)** The 2D pane now draws the low poly's UV island layout
+  via `uvlayout.layout_image` (vectorized edge rasterization over the per-corner UVs): the
+  island wireframe / seams over a checkerboard when nothing is baked, or over the selected
+  baked map when one exists (the bake is already in UV space, so this is a UV-space texture
+  view with seams). Islands vs the checker show wasted UV space; the baked map under the
+  wireframe shows coverage. Replaces the placeholder stand-in that mirrored the tray map.
 - **[med] Before/after split or difference view** for comparing a bake to the high poly.
 
 ## E. Import / format reach

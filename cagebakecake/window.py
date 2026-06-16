@@ -39,7 +39,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import chrome, project, recipe, theme, win_chrome
+from . import chrome, project, recipe, theme, uvlayout, win_chrome
 from .app import CageEditor
 from .imageview import ImageView
 from .widgets import (
@@ -732,8 +732,7 @@ class MainWindow(QMainWindow):
             f"{w} x {h} · {ss}x SS" if self._preview_maps else "no bake yet")
         if not self._preview_maps:
             self._preview.clear()
-            self._uv_view.clear()
-            self._uv_caption.setText("UV preview - bake a map to see it here")
+            self._refresh_uv_pane()  # still show the UV layout with no bake yet
             return
         names = [name for name, _img in self._preview_maps]
         # Keep the user's current pick if it still exists, else show the last-baked map.
@@ -748,9 +747,27 @@ class MainWindow(QMainWindow):
         if 0 <= idx < len(self._preview_maps):
             name, img = self._preview_maps[idx]
             self._preview.set_image(self._isolated(img))
-            # Mirror the selected map into the 2D UV pane (stand-in for the UV view).
-            self._uv_view.set_image(self._isolated(img))
-            self._uv_caption.setText(f"{name}  ·  {self._iso.currentText()}")
+        self._refresh_uv_pane()
+
+    def _refresh_uv_pane(self) -> None:
+        """Draw the low poly's UV island layout in the 2D pane - over the selected baked
+        map when one exists (the bake is already in UV space, so this is a UV-space
+        texture view with seams), else over a checkerboard. Shows islands, seams and
+        wasted UV space even before any bake."""
+        uvs = None if self.editor is None else self.editor._cached_low_uvs
+        if uvs is None:
+            self._uv_view.clear()
+            self._uv_caption.setText("UV preview - the low poly has no UVs")
+            return
+        base = None
+        label = "UV layout"
+        idx = self._preview_pick.currentIndex()
+        if 0 <= idx < len(self._preview_maps):
+            name, img = self._preview_maps[idx]
+            base = self._isolated(img)
+            label = f"UV layout · {name} · {self._iso.currentText()}"
+        self._uv_view.set_image(uvlayout.layout_image(uvs, base=base))
+        self._uv_caption.setText(label)
 
     @staticmethod
     def _size_combo() -> QComboBox:
