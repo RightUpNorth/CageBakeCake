@@ -504,6 +504,27 @@ def pack_outputs(baked: dict, recipe, lp_name: str) -> dict:
     return result
 
 
+# --- exploded bake (per-part separation) -----------------------------------
+def explode_translation(points: np.ndarray, ranges, center, factor: float) -> np.ndarray:
+    """Per-point translation that pushes each part radially away from `center` by
+    factor * (part centroid - center). `ranges` is a list of (name, start, count) point
+    spans into `points`. Returns an (N,3) offset to add to `points`.
+
+    Used for an exploded bake: separating the parts so a cage's rays no longer cross from
+    one part into a neighbour. A matched low/high pair shares a centroid, so both move by
+    the same offset and stay aligned for the bake, while distinct parts diverge.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    c = np.asarray(center, dtype=np.float64)
+    out = np.zeros_like(pts)
+    for _name, start, count in ranges:
+        if count <= 0:
+            continue
+        centroid = pts[start:start + count].mean(axis=0)
+        out[start:start + count] = (centroid - c) * float(factor)
+    return out
+
+
 # --- cage-bounded ray casting (Phase 7.2) ----------------------------------
 def make_ray_mesh(high_points: np.ndarray, high_tris: np.ndarray):
     """A trimesh whose embree BVH is built once (on first ray query) and cached on it.

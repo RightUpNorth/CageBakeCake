@@ -82,10 +82,12 @@ class CageEditor:
             self.high = high_scene["merged"]
             self.high_parts = high_scene["parts"]
             self._cached_high_tris = high_scene["tris"]
+            self._high_ranges = high_scene["ranges"]
         else:
             self.high = None
             self.high_parts = []
             self._cached_high_tris = None
+            self._high_ranges = []
         # The high-poly ray-cast mesh (embree BVH) is the dominant bake cost and does not
         # change while the cage is edited, so build it once and reuse it across bakes.
         # A fresh CageEditor is created when a new high poly is loaded, so this is naturally
@@ -194,6 +196,7 @@ class CageEditor:
         self._supersample = 1   # anti-alias multiple (bake at NxN, average down)
         self._padding = 0       # UV-island edge padding in texels (0 = none)
         self._ao_samples = 64   # hemisphere rays per texel for the AO bake
+        self._explode = 0.0     # exploded-bake part separation factor (0 = bake in place)
         # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
         # links a low part and a high part that share a prim name (toggling one toggles both).
         self._part_vis: dict[tuple[str, int], bool] = {}
@@ -1182,6 +1185,7 @@ class CageEditor:
             supersample=int(self._supersample),
             padding=int(self._padding),
             ao_samples=int(self._ao_samples),
+            explode=float(self._explode),
         )
         return st
 
@@ -1196,6 +1200,7 @@ class CageEditor:
         self.set_supersample(st.get("supersample", self._supersample))
         self.set_padding(st.get("padding", self._padding))
         self.set_ao_samples(st.get("ao_samples", self._ao_samples))
+        self.set_explode(st.get("explode", self._explode))
         push, manual, skew, skew_map, matched = project.decode_edits(
             st, len(self.manual_delta))
         if push is not None:
@@ -1239,6 +1244,30 @@ class CageEditor:
         """Hemisphere rays per texel for the AO bake (dock dropdown)."""
         self._ao_samples = max(1, int(n))
 
+    def set_explode(self, factor: float) -> None:
+        """Exploded-bake separation: before baking, each part is pushed radially out from
+        the scene centre by factor*(part centroid - centre), so neighbouring parts stop
+        cross-projecting into each other. 0 bakes in place (dock slider)."""
+        self._explode = max(0.0, float(factor))
+
+    def _exploded_geometry(self):
+        """The (low_points, cage_points, high_points, ray_mesh) to bake from. With explode
+        off, the originals plus the cached BVH; with explode on, per-part-separated copies
+        and None - the BVH must be rebuilt over the moved high poly. The cage shares the
+        low poly's indexing, so it takes the same per-part offset as the low."""
+        high_points = None if self.high is None else self.high.points
+        if self._explode <= 0.0 or self.high is None:
+            return self.low.points, self.cage.points, high_points, self._get_ray_mesh()
+        lo = np.minimum(self.low.points.min(axis=0), self.high.points.min(axis=0))
+        hi = np.maximum(self.low.points.max(axis=0), self.high.points.max(axis=0))
+        center = 0.5 * (lo + hi)
+        low_off = bake.explode_translation(
+            self.low.points, self._low_ranges, center, self._explode)
+        high_off = bake.explode_translation(
+            self.high.points, self._high_ranges, center, self._explode)
+        return (self.low.points + low_off, self.cage.points + low_off,
+                self.high.points + high_off, None)
+
     def _get_ray_mesh(self):
         """The cached high-poly ray mesh (embree BVH), built on first use. Reused by every
         bake so only the first one pays the BVH build."""
@@ -1262,14 +1291,16 @@ class CageEditor:
         w, h = self._bake_size
         out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_ao.png"
                            if write else None)
-        self._bake_status(f"Baking AO {w}x{h} ({self._ao_samples} rays/texel)...")
+        ex = " (exploded)" if self._explode > 0.0 else ""
+        self._bake_status(f"Baking AO {w}x{h}{ex} ({self._ao_samples} rays/texel)...")
         self.pl.render()
+        low_p, _cage_p, high_p, ray_mesh = self._exploded_geometry()
         image = bake.bake_ao(
-            self.low.points, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
-            self.high.points, self._cached_high_tris, resolution=(w, h),
+            low_p, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            high_p, self._cached_high_tris, resolution=(w, h),
             samples=self._ao_samples, padding=self._padding, out_path=out,
             progress=progress or (lambda m: print(f"[ao] {m}")),
-            should_cancel=should_cancel, ray_mesh=self._get_ray_mesh(),
+            should_cancel=should_cancel, ray_mesh=ray_mesh,
         )
         if image is not None:
             self._baked_ao = image
@@ -1317,18 +1348,20 @@ class CageEditor:
         w, h = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
         out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0] + "_normal.png"
                            if write else None)
-        self._bake_status(f"Baking {w}x{h} (this can take a while)...")
+        ex = " (exploded)" if self._explode > 0.0 else ""
+        self._bake_status(f"Baking {w}x{h}{ex} (this can take a while)...")
         self.pl.render()
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
         result = bake.bake(
-            self.low.points, low_tris, self.hard_normals, low_uvs,
-            self.cage.points, self.high.points, high_tris,
+            low_p, low_tris, self.hard_normals, low_uvs,
+            cage_p, high_p, high_tris,
             np.asarray(self.high.point_normals, dtype=np.float64),
             resolution=(w, h), out_path=out,
             progress=progress or (lambda m: print(f"[bake] {m}")),
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
             supersample=self._supersample, padding=self._padding,
             should_cancel=should_cancel, return_miss=True,
-            ray_mesh=self._get_ray_mesh(),  # cached embree BVH (perf)
+            ray_mesh=ray_mesh,  # cached BVH in place; rebuilt for an exploded bake
         )
         if result is None:
             self._bake_status("Bake cancelled.")

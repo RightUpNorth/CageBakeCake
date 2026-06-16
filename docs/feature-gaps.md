@@ -59,10 +59,14 @@ Current bakes: tangent-space normal, AO, curvature. Supersampling, edge padding,
 cancellable run already exist. Peer bakers ship a wider map set and, importantly, tell
 you when the bake went wrong.
 
-- **[high] Exploded bake / per-object cage offset.** When low and high have multiple
-  parts, neighbouring parts cross-project into each other. Offsetting parts apart for
-  the bake (or strict per-part name matching during ray casting - partially seeded by
-  the existing "name match") is the standard fix.
+- **[high] Exploded bake / per-object cage offset. (DONE)** An "Explode bake" dock slider
+  drives `CageEditor._exploded_geometry`: before baking, each part is pushed radially out
+  from the scene centre by factor*(part centroid - centre) via `bake.explode_translation`
+  (low, cage and high together; the cage shares the low's indexing). A matched low/high
+  pair shares a centroid and moves as one, while distinct parts diverge, so neighbours
+  stop cross-projecting. The BVH is rebuilt over the moved high poly (the in-place cache
+  is bypassed); the encode is translation-invariant, so the map is unchanged but for the
+  removed cross-hits. Applies to the normal and AO bakes and saves with the project.
 - **[high] Ray-miss / projection feedback. (PARTLY DONE)** The normal bake now also
   produces a "Ray miss" map (`bake.bake(..., return_miss=True)` -> `_miss_map`): green
   where a ray hit the high poly, red where it missed (the cage failed to reach a
