@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
 
         # Three functional window buttons (the design's faux dots, made real).
         dots = QWidget()
+        dots.setObjectName("windots")  # transparent so the title bar shows behind
         dlay = QHBoxLayout(dots)
         dlay.setContentsMargins(8, 0, 0, 0)
         dlay.setSpacing(7)
