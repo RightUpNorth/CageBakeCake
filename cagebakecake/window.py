@@ -55,6 +55,7 @@ from .widgets import (
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
 _PROJECT_FILTER = "CageBakeCake project (*.cbcproj);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
+_EXPLODE_MAX = 2.0    # max exploded-bake separation factor (slider top)
 _BAKE_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384]  # normal-map width/height choices
 
 
@@ -452,6 +453,13 @@ class MainWindow(QMainWindow):
             self._ao_samples.addItem(str(s))
         self._ao_samples.currentTextChanged.connect(lambda t: self.editor.set_ao_samples(int(t)))
         f.addRow("AO samples", self._ao_samples)
+        # Exploded bake: separate multi-part low/high so neighbours stop cross-projecting.
+        self._explode = QSlider(Qt.Horizontal)
+        self._explode.setRange(0, _SLIDER_STEPS)
+        self._explode.valueChanged.connect(self._on_explode)
+        self._explode_label = QLabel("-")
+        f.addRow(_slider_field("Explode bake (0 = in place)", self._explode,
+                               self._explode_label))
         # Individual (per-type) bakes, kept available alongside the packed recipe bake.
         indiv = QGridLayout()
         for col, (text, slot) in enumerate((
@@ -806,7 +814,7 @@ class MainWindow(QMainWindow):
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
                    self._bake_w, self._bake_h, self._supersample, self._padding,
-                   self._ao_samples, self._name_match, self._mesh_list)
+                   self._ao_samples, self._explode, self._name_match, self._mesh_list)
         for w in widgets:
             w.blockSignals(True)
         self._offset.setValue(round(ed.global_push / ed._push_max * _SLIDER_STEPS))
@@ -843,6 +851,8 @@ class MainWindow(QMainWindow):
         self._supersample.setCurrentText(f"{ed._supersample}x")
         self._padding.setCurrentText(str(ed._padding))
         self._ao_samples.setCurrentText(str(ed._ao_samples))
+        self._explode.setValue(round(ed._explode / _EXPLODE_MAX * _SLIDER_STEPS))
+        self._explode_label.setText(f"{ed._explode:.2f}")
         self._name_match.setChecked(ed._name_match)
         self._mesh_list.clear()
         for group, idx, label, visible in ed.meshes():
@@ -936,6 +946,11 @@ class MainWindow(QMainWindow):
     def _on_bake_size(self, _text: str) -> None:
         self.editor.set_bake_size(int(self._bake_w.currentText()),
                                   int(self._bake_h.currentText()))
+
+    def _on_explode(self, step: int) -> None:
+        value = step / _SLIDER_STEPS * _EXPLODE_MAX
+        self.editor.set_explode(value)
+        self._explode_label.setText(f"{value:.2f}")
 
     def _on_mesh_toggle(self, item: QListWidgetItem) -> None:
         group, idx = item.data(Qt.UserRole)
