@@ -688,6 +688,15 @@ class MainWindow(QMainWindow):
         self._iso.addItems(["RGB", "R", "G", "B", "A"])
         self._iso.currentIndexChanged.connect(
             lambda _i: self._show_preview(self._preview_pick.currentIndex()))
+        # Before/after difference: pin the current map as a reference, then "Diff" shows
+        # the heatmap of the live map against it.
+        self._diff_ref: tuple[str, object] | None = None
+        pin_btn = QPushButton("Pin ref")
+        pin_btn.clicked.connect(self._pin_diff_ref)
+        self._diff = QPushButton("Diff")
+        self._diff.setCheckable(True)
+        self._diff.toggled.connect(
+            lambda _c: self._show_preview(self._preview_pick.currentIndex()))
         zoom_out = QPushButton("-")
         zoom_out.clicked.connect(lambda: self._preview.scale(0.8, 0.8))
         fit_btn = QPushButton("Fit")
@@ -701,6 +710,8 @@ class MainWindow(QMainWindow):
         footer.addWidget(self._preview_pick, 1)
         footer.addWidget(QLabel("Isolate"))
         footer.addWidget(self._iso)
+        footer.addWidget(pin_btn)
+        footer.addWidget(self._diff)
         footer.addWidget(zoom_out)
         footer.addWidget(fit_btn)
         footer.addWidget(zoom_in)
@@ -794,10 +805,25 @@ class MainWindow(QMainWindow):
     def _on_preview_pick(self, idx: int) -> None:
         self._show_preview(idx)
 
+    def _pin_diff_ref(self) -> None:
+        """Pin the currently-shown map as the difference reference (the 'before')."""
+        idx = self._preview_pick.currentIndex()
+        if 0 <= idx < len(self._preview_maps):
+            name, img = self._preview_maps[idx]
+            self._diff_ref = (name, np.array(img, copy=True))
+            self._set_status(f"Pinned '{name}' as the diff reference.")
+
     def _show_preview(self, idx: int) -> None:
         if 0 <= idx < len(self._preview_maps):
             name, img = self._preview_maps[idx]
-            self._preview.set_image(self._isolated(img))
+            if self._diff.isChecked() and self._diff_ref is not None:
+                try:
+                    self._preview.set_image(bake.diff_map(img, self._diff_ref[1]))
+                except ValueError:  # size mismatch with the pinned reference
+                    self._set_status("Diff needs the same map size as the pinned reference.")
+                    self._preview.set_image(self._isolated(img))
+            else:
+                self._preview.set_image(self._isolated(img))
         self._refresh_uv_pane()
 
     def _refresh_uv_pane(self) -> None:
