@@ -50,8 +50,15 @@ brushes and selection tools artists expect.
   mirror (`cage.reflect_axis`). Asymmetric vertices with no partner are left untouched.
 - **[med] Multi-vertex selection** (box / lasso / paint-select) so a region can be
   pushed together without soft-select falloff.
-- **[med] Smooth / relax brush** for the cage, to remove the lumps local edits create.
-- **[low] Numeric entry** for a selected vertex's offset (precise nudge).
+- **[med] Smooth / relax brush. (DONE)** `CageEditor.smooth_brush_at` + the "Smooth brush"
+  dock toggle/strength relax the cage: left-drag pulls each affected vertex toward the
+  average of its triangulation neighbours (Laplacian, adjacency built once) by
+  strength*weight into manual_delta, so it composes, undoes as one stroke and mirrors with
+  symmetry. The third mutually-exclusive left-drag brush (push / skew / smooth).
+- **[low] Numeric entry. (DONE)** A "Selected offset" dock spin box shows and sets the
+  picked vertex's manual normal-offset (`CageEditor.selected_offset` /
+  `set_selected_offset`, preserving any tangential edit); an editor on-select callback
+  keeps it following viewport picks.
 
 ## C. Baking - more map types and correctness feedback
 

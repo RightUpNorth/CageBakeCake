@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
+    QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -393,9 +394,29 @@ class MainWindow(QMainWindow):
         f.addRow(_slider_field("Brush push (- in / + out)", self._push_strength,
                                self._push_strength_label))
 
+        self._smooth_brush = ToggleSwitch("")
+        self._smooth_brush.toggled.connect(self._on_smooth_brush)
+        f.addRow(_toggle_row("Smooth brush (left-drag)", self._smooth_brush))
+
+        self._smooth_strength = QSlider(Qt.Horizontal)
+        self._smooth_strength.setRange(0, _SLIDER_STEPS)
+        self._smooth_strength.valueChanged.connect(self._on_smooth_strength)
+        self._smooth_strength_label = QLabel("-")
+        f.addRow(_slider_field("Smooth strength", self._smooth_strength,
+                               self._smooth_strength_label))
+
         self._symmetry = SegmentedControl(["Off", "X", "Y", "Z"])
         self._symmetry.changed.connect(self._on_symmetry)
         f.addRow(_toggle_row("Symmetry (mirror edits)", self._symmetry))
+
+        # Precise numeric offset for the selected vertex (follows viewport picks).
+        self._vert_offset = QDoubleSpinBox()
+        self._vert_offset.setRange(-1.0e6, 1.0e6)
+        self._vert_offset.setDecimals(4)
+        self._vert_offset.setSingleStep(0.001)
+        self._vert_offset.setEnabled(False)
+        self._vert_offset.valueChanged.connect(self._on_vert_offset)
+        f.addRow("Selected offset", self._vert_offset)
         sections.addWidget(cage_sec)
 
         # --- Display (interim home; the design moves these to the viewport HUD) ---
@@ -837,6 +858,7 @@ class MainWindow(QMainWindow):
             plotter=self._interactor,
         )
         self.editor.attach_interaction()
+        self.editor._on_select = self._sync_selected_offset  # numeric field follows picks
         # Restore a project's saved edits onto the fresh editor before syncing the dock,
         # so the widgets reflect the loaded values. Warn if the source mesh changed.
         if self._pending_editor_state is not None:
@@ -861,6 +883,7 @@ class MainWindow(QMainWindow):
         ed = self.editor
         widgets = (self._offset, self._opacity, self._skew, self._paint_skew,
                    self._paint_value, self._push_brush, self._push_strength,
+                   self._smooth_brush, self._smooth_strength, self._vert_offset,
                    self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
@@ -882,6 +905,11 @@ class MainWindow(QMainWindow):
         self._push_brush.setChecked(ed._push_brush)
         self._push_strength.setValue(round(ed._push_strength * _SLIDER_STEPS))
         self._push_strength_label.setText(f"{ed._push_strength:+.2f}")
+        self._smooth_brush.setChecked(ed._smooth_brush)
+        self._smooth_strength.setValue(round(ed._smooth_strength * _SLIDER_STEPS))
+        self._smooth_strength_label.setText(f"{ed._smooth_strength:.2f}")
+        self._vert_offset.setEnabled(ed.selected is not None)
+        self._vert_offset.setValue(ed.selected_offset() or 0.0)
         self._symmetry.set_current_index({None: 0, "x": 1, "y": 2, "z": 3}[ed._symmetry])
         self._soft.setChecked(ed.soft_enabled)
         self._radius_max = ed._diag * 0.5
@@ -979,14 +1007,36 @@ class MainWindow(QMainWindow):
         self.editor.set_push_strength(value)
         self._push_strength_label.setText(f"{value:+.2f}")
 
+    def _on_smooth_brush(self, checked: bool) -> None:
+        self.editor.set_smooth_brush(checked)
+        self._sync_brush_toggles()
+
+    def _on_smooth_strength(self, step: int) -> None:
+        value = step / _SLIDER_STEPS
+        self.editor.set_smooth_strength(value)
+        self._smooth_strength_label.setText(f"{value:.2f}")
+
     def _on_symmetry(self, idx: int) -> None:
         self.editor.set_symmetry([None, "x", "y", "z"][idx])
 
+    def _on_vert_offset(self, value: float) -> None:
+        self.editor.set_selected_offset(value)
+
+    def _sync_selected_offset(self, idx) -> None:
+        """Follow a viewport selection: show the picked vertex's normal offset in the
+        numeric field (disabled when nothing is selected). Set by the editor's callback."""
+        off = self.editor.selected_offset()
+        self._vert_offset.blockSignals(True)
+        self._vert_offset.setEnabled(idx is not None)
+        self._vert_offset.setValue(off if off is not None else 0.0)
+        self._vert_offset.blockSignals(False)
+
     def _sync_brush_toggles(self) -> None:
-        """Push and skew paint are mutually exclusive; reflect the editor's resolved
-        state back into both dock toggles without re-emitting their signals."""
+        """The left-drag brushes (push / skew / smooth) are mutually exclusive; reflect the
+        editor's resolved state back into all three dock toggles without re-emitting."""
         for w, on in ((self._paint_skew, self.editor._paint_skew),
-                      (self._push_brush, self.editor._push_brush)):
+                      (self._push_brush, self.editor._push_brush),
+                      (self._smooth_brush, self.editor._smooth_brush)):
             w.blockSignals(True)
             w.setChecked(on)
             w.blockSignals(False)
