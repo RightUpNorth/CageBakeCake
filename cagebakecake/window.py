@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
         f.addRow(_slider_field("Soft radius", self._radius, self._radius_label))
 
         self._paint_skew = ToggleSwitch("")
-        self._paint_skew.toggled.connect(lambda v: self.editor.set_paint_skew(v))
+        self._paint_skew.toggled.connect(self._on_paint_skew)
         f.addRow(_toggle_row("Paint skew (left-drag)", self._paint_skew))
 
         self._paint_value = QSlider(Qt.Horizontal)
@@ -350,6 +350,22 @@ class MainWindow(QMainWindow):
         self._paint_value.valueChanged.connect(self._on_paint_value)
         self._paint_value_label = QLabel("-")
         f.addRow(_slider_field("Brush skew", self._paint_value, self._paint_value_label))
+
+        # Push/inflate brush + symmetry: paint cage offset directly, optionally mirrored.
+        self._push_brush = ToggleSwitch("")
+        self._push_brush.toggled.connect(self._on_push_brush)
+        f.addRow(_toggle_row("Push brush (left-drag)", self._push_brush))
+
+        self._push_strength = QSlider(Qt.Horizontal)
+        self._push_strength.setRange(-_SLIDER_STEPS, _SLIDER_STEPS)
+        self._push_strength.valueChanged.connect(self._on_push_strength)
+        self._push_strength_label = QLabel("-")
+        f.addRow(_slider_field("Brush push (- in / + out)", self._push_strength,
+                               self._push_strength_label))
+
+        self._symmetry = SegmentedControl(["Off", "X", "Y", "Z"])
+        self._symmetry.changed.connect(self._on_symmetry)
+        f.addRow(_toggle_row("Symmetry (mirror edits)", self._symmetry))
         sections.addWidget(cage_sec)
 
         # --- Display (interim home; the design moves these to the viewport HUD) ---
@@ -784,7 +800,8 @@ class MainWindow(QMainWindow):
         triggering their change handlers (which would feed back into the editor)."""
         ed = self.editor
         widgets = (self._offset, self._opacity, self._skew, self._paint_skew,
-                   self._paint_value, self._soft, self._radius,
+                   self._paint_value, self._push_brush, self._push_strength,
+                   self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
                    self._show_normals, self._cage_points, self._cage_wire,
@@ -800,6 +817,10 @@ class MainWindow(QMainWindow):
         self._paint_skew.setChecked(ed._paint_skew)
         self._paint_value.setValue(round(ed._paint_value * _SLIDER_STEPS))
         self._paint_value_label.setText(f"{ed._paint_value:.2f}")
+        self._push_brush.setChecked(ed._push_brush)
+        self._push_strength.setValue(round(ed._push_strength * _SLIDER_STEPS))
+        self._push_strength_label.setText(f"{ed._push_strength:+.2f}")
+        self._symmetry.set_current_index({None: 0, "x": 1, "y": 2, "z": 3}[ed._symmetry])
         self._soft.setChecked(ed.soft_enabled)
         self._radius_max = ed._diag * 0.5
         self._radius.setValue(round(ed.soft_radius / self._radius_max * _SLIDER_STEPS))
@@ -878,6 +899,31 @@ class MainWindow(QMainWindow):
         value = step / _SLIDER_STEPS
         self.editor.set_paint_value(value)
         self._paint_value_label.setText(f"{value:.2f}")
+
+    def _on_paint_skew(self, checked: bool) -> None:
+        self.editor.set_paint_skew(checked)
+        self._sync_brush_toggles()
+
+    def _on_push_brush(self, checked: bool) -> None:
+        self.editor.set_push_brush(checked)
+        self._sync_brush_toggles()
+
+    def _on_push_strength(self, step: int) -> None:
+        value = step / _SLIDER_STEPS
+        self.editor.set_push_strength(value)
+        self._push_strength_label.setText(f"{value:+.2f}")
+
+    def _on_symmetry(self, idx: int) -> None:
+        self.editor.set_symmetry([None, "x", "y", "z"][idx])
+
+    def _sync_brush_toggles(self) -> None:
+        """Push and skew paint are mutually exclusive; reflect the editor's resolved
+        state back into both dock toggles without re-emitting their signals."""
+        for w, on in ((self._paint_skew, self.editor._paint_skew),
+                      (self._push_brush, self.editor._push_brush)):
+            w.blockSignals(True)
+            w.setChecked(on)
+            w.blockSignals(False)
 
     def _on_soft(self, checked: bool) -> None:
         self.editor.set_soft_enabled(checked)
