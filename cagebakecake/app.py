@@ -195,6 +195,15 @@ class CageEditor:
         self._push_brush = False
         self._push_strength = 0.3   # [-1, 1]; negative deflates, positive inflates
         self._painting_push = False
+        # Smooth / relax brush: left-drag pulls each affected cage vertex toward the
+        # average of its neighbours (Laplacian), to take the lumps out of local edits.
+        self._smooth_brush = False
+        self._smooth_strength = 0.5  # [0, 1] blend toward the neighbour average per stroke
+        self._painting_smooth = False
+        self._adjacency: list | None = None  # per-vertex neighbour ids, built on first smooth
+        # Optional callback (set by the Qt window) fired when the selection changes, so the
+        # dock's numeric offset field can follow viewport picks.
+        self._on_select = None
         # Symmetric editing: an edit on one side is mirrored across a world axis plane.
         self._symmetry: str | None = None      # None | "x" | "y" | "z"
         self._mirror: np.ndarray | None = None  # cached mirror-vertex map for _mirror_axis
@@ -657,6 +666,8 @@ class CageEditor:
         print(f"[pick] vertex {idx} at {np.round(self.cage.points[idx], 3)}")
         self._build_gizmo(idx)
         self._rebaseline()
+        if self._on_select is not None:
+            self._on_select(idx)
         self.pl.render()
 
     def _deselect(self) -> None:
@@ -667,6 +678,8 @@ class CageEditor:
         self._remove_gizmo()
         self._hover_actor.SetVisibility(False)
         self._update_soft_viz()
+        if self._on_select is not None:
+            self._on_select(None)
         self.pl.render()
 
     def _rebaseline(self) -> None:
@@ -766,6 +779,15 @@ class CageEditor:
                 self._suppress_camera(True)
                 self._abort(obj, self._press_tag)
             return
+        if self._smooth_brush:
+            # Smooth brush: left-drag relaxes the cage under the cursor.
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.smooth_brush_at(self._mesh_picker.GetPickPosition())
+                self._painting_smooth = True
+                self._suppress_camera(True)
+                self._abort(obj, self._press_tag)
+            return
         if self._paint_skew:
             # Paint mode: left-drag paints the brush skew onto the mesh under the cursor.
             self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
@@ -806,6 +828,10 @@ class CageEditor:
             self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
             if self._mesh_picker.GetCellId() >= 0:
                 self.push_brush_at(self._mesh_picker.GetPickPosition())
+        elif self._painting_smooth:
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.smooth_brush_at(self._mesh_picker.GetPickPosition())
         elif self._painting:
             self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
             if self._mesh_picker.GetCellId() >= 0:
@@ -822,8 +848,9 @@ class CageEditor:
     def _on_release(self, obj, _event) -> None:
         # Only fires for us during a handle / environment drag (the temporary
         # vtkInteractorStyleUser does not swallow release like pyvista's capture style).
-        if self._painting_push:
+        if self._painting_push or self._painting_smooth:
             self._painting_push = False
+            self._painting_smooth = False
             self._suppress_camera(False)
             self._abort(obj, self._release_tag)
             self._push_history()  # commit the whole stroke as one undo step
@@ -1119,10 +1146,11 @@ class CageEditor:
 
     def set_paint_skew(self, on: bool) -> None:
         """Toggle skew paint mode (left-drag on the mesh paints the brush value).
-        Turning it on turns the push brush off - the two left-drag brushes are exclusive."""
+        The left-drag brushes (push / skew / smooth) are mutually exclusive."""
         self._paint_skew = bool(on)
         if self._paint_skew:
             self._push_brush = False
+            self._smooth_brush = False
 
     def set_paint_value(self, value: float) -> None:
         self._paint_value = float(np.clip(value, 0.0, 1.0))
@@ -1130,10 +1158,11 @@ class CageEditor:
     # --- push/inflate brush + symmetry -------------------------------------
     def set_push_brush(self, on: bool) -> None:
         """Toggle push-brush mode (left-drag on the mesh inflates/deflates the cage).
-        Turning it on turns skew paint off - the two left-drag brushes are exclusive."""
+        The left-drag brushes (push / skew / smooth) are mutually exclusive."""
         self._push_brush = bool(on)
         if self._push_brush:
             self._paint_skew = False
+            self._smooth_brush = False
 
     def set_push_strength(self, value: float) -> None:
         """Brush strength in [-1, 1]: negative deflates (pulls the cage in), positive
@@ -1190,6 +1219,79 @@ class CageEditor:
         s, d = src[keep], dst[keep]
         if len(s):
             self.manual_delta[d] = cage.reflect_axis(self.manual_delta[s], self._symmetry)
+
+    # --- smooth / relax brush ----------------------------------------------
+    def set_smooth_brush(self, on: bool) -> None:
+        """Toggle smooth/relax-brush mode (left-drag relaxes the cage toward its neighbour
+        average). The left-drag brushes (push / skew / smooth) are mutually exclusive."""
+        self._smooth_brush = bool(on)
+        if self._smooth_brush:
+            self._push_brush = False
+            self._paint_skew = False
+
+    def set_smooth_strength(self, value: float) -> None:
+        """Relax strength in [0, 1]: the fraction toward the neighbour average per stroke."""
+        self._smooth_strength = float(np.clip(value, 0.0, 1.0))
+
+    def _get_adjacency(self) -> list:
+        """Per-vertex unique neighbour ids from the low-poly triangulation, built once.
+        Drives the smooth brush's Laplacian; the cage is small (low-poly), so this is cheap."""
+        if self._adjacency is None:
+            n = len(self.cage.points)
+            sets = [set() for _ in range(n)]
+            for a, b, c in self._cached_low_tris:
+                sets[a].update((int(b), int(c)))
+                sets[b].update((int(a), int(c)))
+                sets[c].update((int(a), int(b)))
+            self._adjacency = [np.fromiter(s, dtype=np.int64) for s in sets]
+        return self._adjacency
+
+    def smooth_brush_at(self, point, radius: float | None = None,
+                        strength: float | None = None) -> None:
+        """Relax the cage in the soft-radius region under `point`: pull each affected
+        vertex toward the average of its neighbours (Laplacian) by strength*weight, written
+        into manual_delta so it composes and undoes. Mirrors across the symmetry plane."""
+        radius = self.soft_radius if radius is None else float(radius)
+        strength = self._smooth_strength if strength is None else float(strength)
+        idx, w = cage.soft_weights(
+            self.cage.points, np.asarray(point, dtype=np.float64), radius)
+        if len(idx) == 0:
+            return
+        adj = self._get_adjacency()
+        pts = self.cage.points
+        target = np.array([pts[adj[i]].mean(axis=0) if len(adj[i]) else pts[i]
+                           for i in idx])
+        self.manual_delta[idx] += (target - pts[idx]) * (strength * w[:, None])
+        self._apply_symmetry(idx)
+        self._recompose()
+        self._gizmo_follow()
+        if self._soft_poly is not None and self.selected is not None:
+            self._soft_poly.points = self.cage.points[self._aff_idx]
+        self.pl.render()
+
+    # --- numeric offset of the selected vertex ------------------------------
+    def selected_offset(self) -> float | None:
+        """The selected vertex's manual offset along its normal (signed world units), or
+        None if nothing is selected. The total cage offset there is this + the global push."""
+        i = self.selected
+        if i is None:
+            return None
+        return float(self.manual_delta[i] @ self.normals[i])
+
+    def set_selected_offset(self, value: float) -> None:
+        """Set the selected vertex's manual normal-offset to `value` (precise nudge),
+        preserving any tangential edit. Undoable; mirrors with symmetry."""
+        i = self.selected
+        if i is None:
+            return
+        n = self.normals[i]
+        self.manual_delta[i] += n * (float(value) - float(self.manual_delta[i] @ n))
+        self._apply_symmetry(np.array([i]))
+        self._recompose()
+        self._push_history()
+        self._build_gizmo(i)
+        self._rebaseline()
+        self.pl.render()
 
     # --- create cage --------------------------------------------------------
     def _create_cage(self) -> None:
