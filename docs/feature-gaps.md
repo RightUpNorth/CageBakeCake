@@ -92,11 +92,13 @@ you when the bake went wrong.
   bake size / explode factor changed, supersampling is on, or most of the cage moved (then
   a full bake is cleaner). So iterating on one corner of a cage no longer pays for a whole
   map. Still open: refreshing the ray-miss map incrementally too.
-- **[med] More maps. (PARTLY DONE)** Object/world-space normal now bakes
-  (`bake.bake(..., space="object")` encodes the world hit normal directly, reusing the
-  cage-bounded cast); it feeds the recipe (object-space normal maps now produce data
-  instead of packing empty) and the bitmap viewer ("Obj Normal"). Still open:
-  height/displacement, thickness, bent normal, position, material/color ID.
+- **[med] More maps. (PARTLY DONE)** Object/world-space normal (`bake.bake(..., space=
+  "object")`), height/displacement (`bake.bake_height` - signed low-surface-to-hit distance
+  along the normal) and world position (`bake.bake_position` - hit position over the high
+  bbox) all bake now, reusing the cage-bounded cast (height/position via a shared
+  per-texel-geometry helper + a location cast). All three feed the recipe (BAKEABLE_KINDS),
+  the batch/CLI baker, the Bake menu and the bitmap viewer. Still open: thickness, bent
+  normal, material/color ID.
 - **[med] Output options. (PARTLY DONE)** Flip-green (`bake.flip_green`, dock "Flip green
   (DirectX)") inverts the normal map's G channel for the DirectX/OpenGL convention,
   applied to the normal bake / re-bake and saved with the project; channel packing already

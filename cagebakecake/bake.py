@@ -391,6 +391,119 @@ def rebake_faces(
     return image
 
 
+# --- extra ray-cast maps: height + position --------------------------------
+def _texel_geometry(low_points, low_tris, low_normals, low_uvs, cage_points,
+                    firing_normals, width, height):
+    """Rasterize the UVs and compute, per covered texel, the interpolated surface point,
+    shading normal, firing direction, cage point, envelope offset, ray origin (at the
+    cage) and length bound. Shared by the height / position bakes (mirrors bake's core)."""
+    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, width, height)
+    if tri_index.size == 0:
+        return None
+    firing = low_normals if firing_normals is None else firing_normals
+    corners = low_tris[tri_index]
+    w = bary[:, :, None]
+    surf = np.sum(low_points[corners] * w, axis=1)
+    shade = np.sum(low_normals[corners] * w, axis=1)
+    shade = shade / (np.linalg.norm(shade, axis=1, keepdims=True) + 1e-12)
+    direction = np.sum(firing[corners] * w, axis=1)
+    direction = direction / (np.linalg.norm(direction, axis=1, keepdims=True) + 1e-12)
+    cage = np.sum(cage_points[corners] * w, axis=1)
+    offset = np.linalg.norm(cage - surf, axis=1)
+    eps = float(offset.max()) * 1e-4 + 1e-9
+    origins = surf + direction * (offset[:, None] + eps)
+    max_len = 2.0 * offset + 2.0 * eps
+    return dict(yx=yx, surf=surf, shade=shade, direction=direction, offset=offset,
+                origins=origins, max_len=max_len)
+
+
+def _cast_locations(origins, dirs, max_len, high_points, high_tris, ray_mesh):
+    """Nearest high-poly hit *location* per ray within its length bound. Returns
+    (locations (M,3), mask (M,)). The location-returning sibling of `_cast_to_high`."""
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
+    loc, ray_idx, _tri = mesh.ray.intersects_location(
+        ray_origins=origins, ray_directions=dirs, multiple_hits=False)
+    out = np.zeros((len(origins), 3), dtype=np.float64)
+    mask = np.zeros(len(origins), dtype=bool)
+    if len(ray_idx) == 0:
+        return out, mask
+    dist = np.linalg.norm(loc - origins[ray_idx], axis=1)
+    keep = dist <= max_len[ray_idx]
+    out[ray_idx[keep]] = loc[keep]
+    mask[ray_idx[keep]] = True
+    return out, mask
+
+
+def bake_height(low_points, low_tris, low_normals, low_uvs, cage_points, high_points,
+                high_tris, resolution=1024, firing_normals=None, padding=0, ray_mesh=None,
+                out_path=None, progress=None, value_range=None):
+    """Bake a height/displacement map: per texel, the signed distance from the low surface
+    to the high-poly hit along the shading normal, normalized to [0,1] over `value_range`
+    (default the max cage envelope). Mid-grey (128) is on the surface, brighter is outside
+    (toward the cage), darker is inside. Background stays mid-grey."""
+    notify = progress or (lambda _m: None)
+    width, height = (resolution, resolution) if isinstance(resolution, int) else (
+        int(resolution[0]), int(resolution[1]))
+    image = np.full((height, width, 3), 128, dtype=np.uint8)
+    g = _texel_geometry(low_points, low_tris, low_normals, low_uvs, cage_points,
+                        firing_normals, width, height)
+    if g is None:
+        if out_path:
+            _write_png(out_path, image)
+        return image
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
+    loc, mask = _cast_locations(g["origins"], -g["direction"], g["max_len"],
+                                high_points, high_tris, mesh)
+    signed = np.sum((loc - g["surf"]) * g["shade"], axis=1)
+    rng = value_range if value_range else (float(g["offset"].max()) or 1.0)
+    gray = np.clip(0.5 + 0.5 * signed / rng, 0.0, 1.0)
+    hit_yx = g["yx"][mask]
+    val = np.clip(np.round(gray[mask] * 255.0), 0, 255).astype(np.uint8)
+    image[hit_yx[:, 0], hit_yx[:, 1]] = np.repeat(val[:, None], 3, axis=1)
+    notify(f"height: {int(mask.sum())}/{len(g['yx'])} texels hit")
+    if padding > 0:
+        m = np.zeros((height, width), dtype=bool)
+        m[hit_yx[:, 0], hit_yx[:, 1]] = True
+        image = _pad_islands(image, m, int(padding))
+    if out_path:
+        _write_png(out_path, image)
+    return image
+
+
+def bake_position(low_points, low_tris, low_normals, low_uvs, cage_points, high_points,
+                  high_tris, resolution=1024, firing_normals=None, padding=0, ray_mesh=None,
+                  out_path=None, progress=None, bbox=None):
+    """Bake a world-position map: per texel, the high-poly hit position normalized over the
+    high poly's bounding box and encoded to RGB. Background is black."""
+    notify = progress or (lambda _m: None)
+    width, height = (resolution, resolution) if isinstance(resolution, int) else (
+        int(resolution[0]), int(resolution[1]))
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    g = _texel_geometry(low_points, low_tris, low_normals, low_uvs, cage_points,
+                        firing_normals, width, height)
+    if g is None:
+        if out_path:
+            _write_png(out_path, image)
+        return image
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
+    loc, mask = _cast_locations(g["origins"], -g["direction"], g["max_len"],
+                                high_points, high_tris, mesh)
+    hp = np.asarray(high_points, dtype=np.float64)
+    lo, hi = (bbox if bbox is not None else (hp.min(axis=0), hp.max(axis=0)))
+    span = np.where((hi - lo) < 1e-12, 1.0, hi - lo)
+    norm = np.clip((loc[mask] - lo) / span, 0.0, 1.0)
+    hit_yx = g["yx"][mask]
+    image[hit_yx[:, 0], hit_yx[:, 1]] = np.clip(norm * 255.0, 0, 255).astype(np.uint8)
+    notify(f"position: {int(mask.sum())}/{len(g['yx'])} texels hit")
+    if padding > 0:
+        m = np.zeros((height, width), dtype=bool)
+        m[hit_yx[:, 0], hit_yx[:, 1]] = True
+        image = _pad_islands(image, m, int(padding))
+    if out_path:
+        _write_png(out_path, image)
+    return image
+
+
 # --- ray-miss / projection feedback ----------------------------------------
 def _miss_map(yx, hit_mask, covered, ss: int, width: int, height: int,
               poke=None) -> np.ndarray:
