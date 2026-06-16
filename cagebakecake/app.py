@@ -221,6 +221,11 @@ class CageEditor:
         self._ao_samples = 64   # hemisphere rays per texel for the AO bake
         self._explode = 0.0     # exploded-bake part separation factor (0 = bake in place)
         self._flip_green = False  # invert normal-map green (OpenGL <-> DirectX)
+        # Auto-solve firing-tilt controls: how far the solved firing may lean toward the
+        # nearest high surface (degrees) and how much of that lean to apply (0 = pure-normal
+        # magnitude solve, 1 = full aim). See autocage.solve / docs/feature-gaps.md.
+        self._max_tilt_deg = 60.0
+        self._aim_strength = 1.0
         # Per-part visibility for the mesh checklist: {("low"|"high", idx): bool}. Name match
         # links a low part and a high part that share a prim name (toggling one toggles both).
         self._part_vis: dict[tuple[str, int], bool] = {}
@@ -1246,6 +1251,15 @@ class CageEditor:
             self._push_brush = False
             self._paint_skew = False
 
+    def set_max_tilt(self, degrees: float) -> None:
+        """How far the auto-solver may lean the firing direction toward the nearest high
+        surface (0 = no tilt = pure-normal magnitude solve)."""
+        self._max_tilt_deg = float(np.clip(degrees, 0.0, 90.0))
+
+    def set_aim_strength(self, value: float) -> None:
+        """How much of the clamped aim to apply (0 = pure normal, 1 = full aim)."""
+        self._aim_strength = float(np.clip(value, 0.0, 1.0))
+
     def set_smooth_strength(self, value: float) -> None:
         """Relax strength in [0, 1]: the fraction toward the neighbour average per stroke."""
         self._smooth_strength = float(np.clip(value, 0.0, 1.0))
@@ -1348,6 +1362,8 @@ class CageEditor:
             ao_samples=int(self._ao_samples),
             explode=float(self._explode),
             flip_green=bool(self._flip_green),
+            max_tilt_deg=float(self._max_tilt_deg),
+            aim_strength=float(self._aim_strength),
         )
         return st
 
@@ -1364,6 +1380,8 @@ class CageEditor:
         self.set_ao_samples(st.get("ao_samples", self._ao_samples))
         self.set_explode(st.get("explode", self._explode))
         self.set_flip_green(st.get("flip_green", self._flip_green))
+        self.set_max_tilt(st.get("max_tilt_deg", self._max_tilt_deg))
+        self.set_aim_strength(st.get("aim_strength", self._aim_strength))
         push, manual, skew, skew_map, aim, matched = project.decode_edits(
             st, len(self.manual_delta))
         if push is not None:
@@ -1749,6 +1767,8 @@ class CageEditor:
             ray_mesh=self._get_ray_mesh(),
             default_push=self.global_push,
             resolution=int(resolution),
+            max_tilt_deg=float(self._max_tilt_deg),
+            aim_strength=float(self._aim_strength),
         )
         return {"kwargs": kwargs, "base_firing": np.array(base_firing, dtype=np.float64)}
 

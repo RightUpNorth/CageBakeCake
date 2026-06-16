@@ -373,6 +373,19 @@ class MainWindow(QMainWindow):
         self._autosolve_btn = QPushButton("Auto-solve cage")
         self._autosolve_btn.clicked.connect(self._autosolve)
         f.addRow(self._autosolve_btn)
+        # How far / how much the solver may lean the firing into overhangs (0 tilt = a
+        # pure-normal solve). These feed autocage.solve's max_tilt_deg / aim_strength.
+        self._max_tilt = QSlider(Qt.Horizontal)
+        self._max_tilt.setRange(0, _SLIDER_STEPS)
+        self._max_tilt.valueChanged.connect(self._on_max_tilt)
+        self._max_tilt_label = QLabel("-")
+        f.addRow(_slider_field("Solve max tilt", self._max_tilt, self._max_tilt_label))
+        self._aim_strength = QSlider(Qt.Horizontal)
+        self._aim_strength.setRange(0, _SLIDER_STEPS)
+        self._aim_strength.valueChanged.connect(self._on_aim_strength)
+        self._aim_strength_label = QLabel("-")
+        f.addRow(_slider_field("Solve aim strength", self._aim_strength,
+                               self._aim_strength_label))
 
         self._skew = QSlider(Qt.Horizontal)
         self._skew.setObjectName("amberSlider")  # the design fills Skew with accent2
@@ -930,6 +943,7 @@ class MainWindow(QMainWindow):
         widgets = (self._offset, self._opacity, self._skew, self._paint_skew,
                    self._paint_value, self._push_brush, self._push_strength,
                    self._smooth_brush, self._smooth_strength, self._vert_offset,
+                   self._max_tilt, self._aim_strength,
                    self._soft, self._radius,
                    self._low_shaded, self._low_wire, self._high_visible,
                    self._high_shaded, self._high_wire, self._normal_map,
@@ -954,6 +968,10 @@ class MainWindow(QMainWindow):
         self._smooth_brush.setChecked(ed._smooth_brush)
         self._smooth_strength.setValue(round(ed._smooth_strength * _SLIDER_STEPS))
         self._smooth_strength_label.setText(f"{ed._smooth_strength:.2f}")
+        self._max_tilt.setValue(round(ed._max_tilt_deg / 90.0 * _SLIDER_STEPS))
+        self._max_tilt_label.setText(f"{ed._max_tilt_deg:.0f} deg")
+        self._aim_strength.setValue(round(ed._aim_strength * _SLIDER_STEPS))
+        self._aim_strength_label.setText(f"{ed._aim_strength:.2f}")
         self._vert_offset.setEnabled(ed.selected is not None)
         self._vert_offset.setValue(ed.selected_offset() or 0.0)
         self._symmetry.set_current_index({None: 0, "x": 1, "y": 2, "z": 3}[ed._symmetry])
@@ -1061,6 +1079,16 @@ class MainWindow(QMainWindow):
         value = step / _SLIDER_STEPS
         self.editor.set_smooth_strength(value)
         self._smooth_strength_label.setText(f"{value:.2f}")
+
+    def _on_max_tilt(self, step: int) -> None:
+        degrees = step / _SLIDER_STEPS * 90.0
+        self.editor.set_max_tilt(degrees)
+        self._max_tilt_label.setText(f"{degrees:.0f} deg")
+
+    def _on_aim_strength(self, step: int) -> None:
+        value = step / _SLIDER_STEPS
+        self.editor.set_aim_strength(value)
+        self._aim_strength_label.setText(f"{value:.2f}")
 
     def _on_symmetry(self, idx: int) -> None:
         self.editor.set_symmetry([None, "x", "y", "z"][idx])

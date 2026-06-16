@@ -124,20 +124,26 @@ def editor_factory(tmp_path):
 def test_editor_state_round_trips_through_a_fresh_editor(editor_factory):
     ed = editor_factory()
     ed.manual_delta[1] = [0.05, 0.0, 0.0]
+    ed.aim_delta[2] = [0.1, 0.0, -0.05]   # auto-solver firing tilt
     ed.global_push = 0.123
     ed.set_skew(0.4)
     ed.set_bake_size(2048, 1024)
     ed.set_supersample(2)
     ed.set_padding(8)
     ed.set_ao_samples(128)
+    ed.set_max_tilt(45.0)
+    ed.set_aim_strength(0.5)
     st = ed.authoring_state()
 
     ed2 = editor_factory()
     assert ed2.apply_authoring_state(st) is True
     np.testing.assert_allclose(ed2.manual_delta, ed.manual_delta)
+    np.testing.assert_allclose(ed2.aim_delta, ed.aim_delta)
     np.testing.assert_allclose(ed2.skew_map, ed.skew_map)
     assert ed2.global_push == 0.123
     assert ed2._bake_size == (2048, 1024)
     assert ed2._supersample == 2 and ed2._padding == 8 and ed2._ao_samples == 128
-    # The restored cage is recomposed, not left at rest.
+    assert ed2._max_tilt_deg == 45.0 and ed2._aim_strength == 0.5
+    # The restored cage and firing tilt are recomposed, not left at rest.
     np.testing.assert_allclose(ed2.cage.points, ed.cage.points)
+    np.testing.assert_allclose(ed2.normals, ed.normals)
