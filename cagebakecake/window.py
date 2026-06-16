@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
         bake_menu.addAction("Bake recipe", self._bake_recipe)
         bake_menu.addSeparator()
         bake_menu.addAction("Bake normal map", self._bake)
+        bake_menu.addAction("Re-bake changed region", self._rebake)
         bake_menu.addAction("Bake AO", self._bake_ao)
         bake_menu.addAction("Bake curvature", self._bake_curvature)
         bake_menu.addAction("Cancel bake", self._cancel_bake)
@@ -463,8 +464,8 @@ class MainWindow(QMainWindow):
         # Individual (per-type) bakes, kept available alongside the packed recipe bake.
         indiv = QGridLayout()
         for col, (text, slot) in enumerate((
-            ("Bake normal", self._bake), ("Bake AO", self._bake_ao),
-            ("Bake curvature", self._bake_curvature))):
+            ("Bake normal", self._bake), ("Re-bake region", self._rebake),
+            ("Bake AO", self._bake_ao), ("Bake curvature", self._bake_curvature))):
             btn = QPushButton(text)
             btn.clicked.connect(slot)
             indiv.addWidget(btn, 0, col)
@@ -1042,6 +1043,18 @@ class MainWindow(QMainWindow):
     def _bake_curvature(self) -> None:
         self.editor._bake_curvature()
         self._set_status("Curvature baked (from the last normal-map bake).")
+        self._refresh_preview()
+
+    def _rebake(self) -> None:
+        """Incremental re-bake of just the changed cage region (falls back to a full
+        bake when that is not possible - see CageEditor.rebake)."""
+        self._set_status("Re-baking changed region...")
+        QApplication.processEvents()
+        self.editor.rebake(progress=self._progress)
+        for w, checked in ((self._low_shaded, True), (self._normal_map, True)):
+            w.blockSignals(True)
+            w.setChecked(checked)
+            w.blockSignals(False)
         self._refresh_preview()
 
     def _open_low(self) -> None:

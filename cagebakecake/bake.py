@@ -38,7 +38,7 @@ MISS_BG = np.array([28, 28, 30], dtype=np.uint8)
 
 # --- rasterization (Phase 7.1) ---------------------------------------------
 def _rasterize_uv_triangles(
-    uvs: np.ndarray, width: int, height: int
+    uvs: np.ndarray, width: int, height: int, faces=None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Walk the UV triangles and record, per covered texel, which triangle covers it
     and the barycentric weights of the texel center within that triangle.
@@ -48,6 +48,10 @@ def _rasterize_uv_triangles(
     triangles overwrite earlier ones on overlap (last-writer-wins); UV layouts are not
     expected to overlap. Returns (texel_yx, tri_index, bary) for covered texels, where
     bary is (M,3) weights over the triangle's three corners.
+
+    `faces` optionally restricts rasterization to a subset of triangle indices (for an
+    incremental re-bake of just the dirty faces); the returned tri_index still carries the
+    global face id. Default rasterizes every triangle.
     """
     w = int(width)
     h = int(height)
@@ -58,7 +62,8 @@ def _rasterize_uv_triangles(
     px = uvs[..., 0] * w
     py = (1.0 - uvs[..., 1]) * h
 
-    for f in range(uvs.shape[0]):
+    face_iter = range(uvs.shape[0]) if faces is None else (int(i) for i in faces)
+    for f in face_iter:
         x0, x1, x2 = px[f]
         y0, y1, y2 = py[f]
         det = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
@@ -277,6 +282,72 @@ def bake(
     if return_miss:
         miss = _miss_map(yx, hit_mask, covered, ss, width, height)
         return image, miss
+    return image
+
+
+# --- incremental re-bake (additive) ----------------------------------------
+def rebake_faces(
+    prev_image: np.ndarray,
+    low_points: np.ndarray,
+    low_tris: np.ndarray,
+    low_normals: np.ndarray,
+    low_uvs: np.ndarray,
+    cage_points: np.ndarray,
+    high_points: np.ndarray,
+    high_tris: np.ndarray,
+    high_normals: np.ndarray,
+    faces,
+    resolution: "int | tuple[int, int]" = 1024,
+    firing_normals: np.ndarray | None = None,
+    ray_mesh=None,
+    progress=None,
+) -> np.ndarray:
+    """Re-bake only `faces` (indices into low_tris) and composite over a copy of
+    `prev_image`, returning the new (H,W,3) buffer.
+
+    This is the additive / incremental re-bake: a cage edit that only touched a small
+    region maps to a few dirty faces, so re-casting just their texels and pasting the
+    result over the last full bake is far cheaper than a whole-map re-bake. Covered texels
+    whose ray now misses reset to FLAT_RGB (the region may have stopped reaching the
+    surface). Supersample and island padding are not applied - it is an interactive update
+    over a prior full bake, which already carries them. The per-texel cast mirrors `bake`.
+    """
+    low_uvs = np.asarray(low_uvs, dtype=np.float64)
+    if isinstance(resolution, (tuple, list)):
+        width, height = int(resolution[0]), int(resolution[1])
+    else:
+        width = height = int(resolution)
+    notify = progress or (lambda _msg: None)
+    yx, tri_index, bary = _rasterize_uv_triangles(low_uvs, width, height, faces=faces)
+    image = np.array(prev_image, dtype=np.uint8, copy=True)
+    if tri_index.size == 0:
+        return image
+
+    firing = low_normals if firing_normals is None else firing_normals
+    corners = low_tris[tri_index]
+    w = bary[:, :, None]
+    surf = np.sum(low_points[corners] * w, axis=1)
+    shade = np.sum(low_normals[corners] * w, axis=1)
+    shade = shade / (np.linalg.norm(shade, axis=1, keepdims=True) + 1e-12)
+    direction = np.sum(firing[corners] * w, axis=1)
+    direction = direction / (np.linalg.norm(direction, axis=1, keepdims=True) + 1e-12)
+    cage = np.sum(cage_points[corners] * w, axis=1)
+
+    offset = np.linalg.norm(cage - surf, axis=1)
+    eps = float(offset.max()) * 1e-4 + 1e-9
+    origins = surf + direction * (offset[:, None] + eps)
+    max_len = 2.0 * offset + 2.0 * eps
+    hit_normals, hit_mask = _cast_to_high(
+        origins, -direction, max_len, high_points, high_tris, high_normals, ray_mesh=ray_mesh)
+
+    tan, bit = _per_triangle_tangent(low_points[low_tris], low_uvs)
+    rgb = _encode_tangent_space(
+        hit_normals[hit_mask], tan[tri_index][hit_mask], bit[tri_index][hit_mask],
+        shade[hit_mask])
+    image[yx[:, 0], yx[:, 1]] = FLAT_RGB     # reset the dirty region, then paint hits
+    hit_yx = yx[hit_mask]
+    image[hit_yx[:, 0], hit_yx[:, 1]] = rgb
+    notify(f"re-baked {len(faces)} faces, {int(hit_mask.sum())}/{len(yx)} texels hit")
     return image
 
 

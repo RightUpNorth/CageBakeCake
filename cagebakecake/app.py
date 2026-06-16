@@ -172,6 +172,10 @@ class CageEditor:
         self._high_wire_on = False  # wireframe (edge) overlay on the shaded high poly
         self._normal_map_on = False
         self._baked_image: np.ndarray | None = None  # last tangent-space normal bake (H,W,3)
+        # The cage geometry + explode factor the last full normal bake used, so an
+        # incremental re-bake can diff against them to find the changed faces.
+        self._baked_cage_points: np.ndarray | None = None
+        self._baked_explode = 0.0
         self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
@@ -1373,11 +1377,56 @@ class CageEditor:
         pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)
         self._baked_image = image
         self._baked_uv = pp_uv
+        # Snapshot what was baked, so a later incremental re-bake can find the dirty faces.
+        self._baked_cage_points = self.cage.points.copy()
+        self._baked_explode = self._explode
         # Show the result lit on the low poly without hiding the cage: shaded + normal map.
         self._normal_map_on = True
         self.set_low_style(True)
         self._bake_status(f"Baked -> {out}   [n] normal map  [l] low-poly shading"
                           if out else "Baked.   [n] normal map  [l] low-poly shading")
+        self.pl.render()
+
+    def rebake(self, progress=None) -> None:
+        """Additive / incremental re-bake: re-cast only the cage region that changed since
+        the last full normal bake and composite it over the previous map. Falls back to a
+        full `_bake` when there is no prior bake, the bake size or explode factor changed,
+        supersampling is on, or most of the cage moved (then a full bake is cleaner)."""
+        notify = progress or (lambda m: print(f"[rebake] {m}"))
+        w, h = self._bake_size
+        if (self._baked_image is None or self._baked_cage_points is None
+                or self.high is None or self._cached_low_uvs is None
+                or self._supersample > 1
+                or self._explode != self._baked_explode
+                or self._baked_image.shape[:2] != (h, w)
+                or len(self._baked_cage_points) != len(self.cage.points)):
+            return self._bake(progress=progress)
+
+        tol = self._diag * 1e-6
+        moved = np.any(np.abs(self.cage.points - self._baked_cage_points) > tol, axis=1)
+        if not moved.any():
+            self._bake_status("No cage changes since the last bake.")
+            self.pl.render()
+            return
+        tris = self._cached_low_tris
+        dirty = np.any(moved[tris], axis=1)
+        if dirty.mean() > 0.5:  # most of the cage moved -> a full bake is cheaper/cleaner
+            return self._bake(progress=progress)
+
+        faces = np.nonzero(dirty)[0]
+        notify(f"re-baking {len(faces)}/{len(tris)} faces")
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        self._baked_image = bake.rebake_faces(
+            self._baked_image, low_p, tris, self.hard_normals, self._cached_low_uvs,
+            cage_p, high_p, self._cached_high_tris,
+            np.asarray(self.high.point_normals, dtype=np.float64), faces,
+            resolution=(w, h), firing_normals=self.normals, ray_mesh=ray_mesh,
+            progress=notify,
+        )
+        self._baked_cage_points = self.cage.points.copy()
+        self._normal_map_on = True
+        self.set_low_style(True)
+        self._bake_status(f"Re-baked {len(faces)} changed faces.")
         self.pl.render()
 
     def bake_recipe(self, rec, out_dir: str | None = None,
