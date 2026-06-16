@@ -28,8 +28,14 @@ the edited cage).
   carry the editor half, mesh paths are stored relative to the project file for
   portability, and a changed source mesh (vertex-count mismatch) skips just the per-vertex
   arrays and keeps the rest. So a cage edit now survives a restart and is resumable.
-- **[med] Recent files**, drag-and-drop to open, and remembered window/dock layout.
-- **[low] Persist undo history** (or at least warn on unsaved-edits quit).
+- **[med] Recent files + drag-and-drop. (DONE)** A QSettings-backed File > Open Recent
+  submenu (`project.mru_add` is the pure MRU helper - front-move, path-normalized dedup,
+  capped), updated on every mesh / project open; and the window accepts drag-and-drop of
+  `.usd*` / `.cbcproj` files to open them. Still open: remembered window/dock layout.
+- **[low] Warn on unsaved-edits quit. (DONE)** Closing with cage edits that differ from the
+  last saved/opened baseline (push + manual delta + skew; bake settings excluded so they
+  don't nag) prompts Save / Discard / Cancel. Persisting the full undo history is still
+  open.
 
 ## B. Cage editing power
 
