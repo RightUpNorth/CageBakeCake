@@ -308,6 +308,8 @@ class MainWindow(QMainWindow):
         bake_menu.addAction("Re-bake changed region", self._rebake)
         bake_menu.addAction("Bake AO", self._bake_ao)
         bake_menu.addAction("Bake curvature", self._bake_curvature)
+        bake_menu.addAction("Bake height", self._bake_height)
+        bake_menu.addAction("Bake position", self._bake_position)
         bake_menu.addAction("Cancel bake", self._cancel_bake)
 
         help_menu = bar.addMenu("&Help")
@@ -1253,6 +1255,26 @@ class MainWindow(QMainWindow):
             return
         self.editor._bake_curvature()
         self._set_status("Curvature baked (from the last normal-map bake).")
+        self._refresh_preview()
+
+    def _bake_height(self) -> None:
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
+        self._set_status("Baking height...")
+        QApplication.processEvents()
+        self.editor._bake_height(progress=self._progress)
+        self._set_status("Height baked (next to the low poly).")
+        self._refresh_preview()
+
+    def _bake_position(self) -> None:
+        if self._bake_busy:
+            self._set_status("A bake is already running.")
+            return
+        self._set_status("Baking position...")
+        QApplication.processEvents()
+        self.editor._bake_position(progress=self._progress)
+        self._set_status("Position baked (next to the low poly).")
         self._refresh_preview()
 
     def _rebake(self) -> None:

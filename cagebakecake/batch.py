@@ -101,6 +101,14 @@ def _bake_maps(scene_low, scene_high, hard, normals, cage_points, kinds, *,
         out["ao"] = bake.bake_ao(lp, low_tris, hard, low_uvs, hp, high_tris,
                                  resolution=size, samples=ao_samples, padding=padding,
                                  ray_mesh=ray_mesh, progress=progress)
+    if "height" in kinds:
+        out["height"] = bake.bake_height(lp, low_tris, hard, low_uvs, cp, hp, high_tris,
+                                         resolution=size, firing_normals=normals,
+                                         padding=padding, ray_mesh=ray_mesh, progress=progress)
+    if "position" in kinds:
+        out["position"] = bake.bake_position(lp, low_tris, hard, low_uvs, cp, hp, high_tris,
+                                             resolution=size, firing_normals=normals,
+                                             padding=padding, ray_mesh=ray_mesh, progress=progress)
     if "curv" in kinds and out.get("normal") is not None:
         out["curv"] = bake.curvature_from_normal_map(out["normal"])
     return out
@@ -121,7 +129,8 @@ def bake_pair(low_path, high_path, *, cage_path=None, out_dir=".", size=1024,
                         progress=notify)
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(low_path))[0]
-    suffix = {"normal": "_normal", "objnormal": "_objnormal", "ao": "_ao", "curv": "_curv"}
+    suffix = {"normal": "_normal", "objnormal": "_objnormal", "ao": "_ao",
+              "curv": "_curv", "height": "_height", "position": "_position"}
     written = []
     for kind, img in images.items():
         if img is None:

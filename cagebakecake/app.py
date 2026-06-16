@@ -179,6 +179,8 @@ class CageEditor:
         self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
         self._baked_obj_normal: np.ndarray | None = None  # last object-space normal bake
+        self._baked_height: np.ndarray | None = None   # last height/displacement bake
+        self._baked_position: np.ndarray | None = None  # last world-position bake
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
         self._face_miss: np.ndarray | None = None      # per-low-face miss class (0/1/2) for the 3D overlay
         self._miss_overlay_on = False
@@ -1561,6 +1563,42 @@ class CageEditor:
         if image is not None:
             self._baked_obj_normal = image
 
+    def _bake_height(self, out_path: str | None = None, write: bool = True,
+                     progress=None) -> None:
+        """Bake a height/displacement map (signed distance low-surface -> hit along the
+        normal) to memory and optionally disk. `write=False` is memory-only (recipe)."""
+        if self.high is None or self._cached_low_uvs is None:
+            return
+        w, h = self._bake_size
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0]
+                           + "_height.png" if write else None)
+        image = bake.bake_height(
+            low_p, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            cage_p, high_p, self._cached_high_tris, resolution=(w, h),
+            firing_normals=self.normals, padding=self._padding, ray_mesh=ray_mesh,
+            out_path=out, progress=progress or (lambda m: print(f"[height] {m}")))
+        if image is not None:
+            self._baked_height = image
+
+    def _bake_position(self, out_path: str | None = None, write: bool = True,
+                       progress=None) -> None:
+        """Bake a world-position map (hit position over the high-poly bbox) to memory and
+        optionally disk. `write=False` is memory-only (recipe)."""
+        if self.high is None or self._cached_low_uvs is None:
+            return
+        w, h = self._bake_size
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0]
+                           + "_position.png" if write else None)
+        image = bake.bake_position(
+            low_p, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            cage_p, high_p, self._cached_high_tris, resolution=(w, h),
+            firing_normals=self.normals, padding=self._padding, ray_mesh=ray_mesh,
+            out_path=out, progress=progress or (lambda m: print(f"[position] {m}")))
+        if image is not None:
+            self._baked_position = image
+
     # --- threaded bake: pure compute inputs + main-thread apply -------------
     def bake_inputs(self, resolution=None) -> dict | None:
         """Snapshot everything a normal bake needs (on the calling/main thread) so the
@@ -1727,12 +1765,21 @@ class CageEditor:
             self._bake_ao(progress=progress, should_cancel=should_cancel, write=False)
             if cancelled():
                 return None
+        if "height" in kinds:
+            self._bake_height(progress=progress, write=False)
+            if cancelled():
+                return None
+        if "position" in kinds:
+            self._bake_position(progress=progress, write=False)
+            if cancelled():
+                return None
         if "curv" in kinds and self._baked_image is not None:
             self._bake_curvature(write=False)
 
         # Map each recipe bake map to its baked buffer (object-space normals resolve to
         # the object bake, tangent to the tangent bake; non-bakeable kinds stay empty).
-        by_kind = {"ao": self._baked_ao, "curv": self._baked_curv}
+        by_kind = {"ao": self._baked_ao, "curv": self._baked_curv,
+                   "height": self._baked_height, "position": self._baked_position}
         baked = {}
         for m in rec.bake_maps:
             if m.kind == "normal":
@@ -1776,6 +1823,10 @@ class CageEditor:
             maps.append(("Curvature", self._baked_curv))
         if self._baked_obj_normal is not None:
             maps.append(("Obj Normal", self._baked_obj_normal))
+        if self._baked_height is not None:
+            maps.append(("Height", self._baked_height))
+        if self._baked_position is not None:
+            maps.append(("Position", self._baked_position))
         if self._baked_miss is not None:
             maps.append(("Ray miss", self._baked_miss))
         for fname, img in self._packed_outputs.items():

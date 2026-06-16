@@ -39,7 +39,8 @@ def main() -> None:
     parser.add_argument("--bake-project", metavar="CBCPROJ",
                         help="bake a saved project's recipe headlessly and exit")
     parser.add_argument("--maps", default="normal",
-                        help="comma-separated map kinds for --bake: normal,objnormal,ao,curv")
+                        help="comma-separated map kinds for --bake: "
+                             "normal,objnormal,ao,curv,height,position")
     parser.add_argument("--size", type=int, default=1024, help="--bake map size (square)")
     parser.add_argument("--ss", type=int, default=1, help="--bake supersample multiple")
     parser.add_argument("--padding", type=int, default=0, help="--bake UV-island edge padding")
