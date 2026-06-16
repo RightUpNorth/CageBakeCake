@@ -73,16 +73,16 @@ you when the bake went wrong.
   surface), shown in the bitmap viewer's Map dropdown. Still open: distinguishing
   too-tight (poke-through) from too-loose (wrong surface) misses, and a 3D in-viewport
   overlay of the missed regions on the low poly.
-- **[high] Additive / incremental re-bake (explicitly requested).** When a cage edit
-  only touches a small region, re-bake just the affected texels instead of the whole
-  map. The re-bake step is the hot part of the core loop, and a full bake to re-do one
-  corner is the main thing that makes iteration slow. Needs: track the dirty cage
-  region (the set of vertices whose `manual_delta` / skew changed since the last bake),
-  map it to the affected UV faces -> texel rectangle(s), re-cast only those texels, and
-  composite the result over the previous bake buffer (`_baked_image`). Falls back to a
-  full bake when no prior bake exists or the whole cage moved (e.g. the global offset
-  slider). Pairs naturally with the bitmap viewer (show which region was refreshed) and
-  with ray-miss feedback.
+- **[high] Additive / incremental re-bake (explicitly requested). (DONE)**
+  `CageEditor.rebake` (Bake > Re-bake changed region / dock "Re-bake region") diffs the
+  current cage against the snapshot the last full bake stored (`_baked_cage_points`),
+  finds the moved vertices, maps them to the dirty low-poly faces, and re-casts only those
+  via `bake.rebake_faces` - which rasterizes just that face subset (the rasterizer takes a
+  `faces=` arg now) and composites over the previous `_baked_image` (covered texels that
+  newly miss reset to flat). It falls back to a full bake when there is no prior bake, the
+  bake size / explode factor changed, supersampling is on, or most of the cage moved (then
+  a full bake is cleaner). So iterating on one corner of a cage no longer pays for a whole
+  map. Still open: refreshing the ray-miss map incrementally too.
 - **[med] More maps:** object/world-space normal, height/displacement, thickness, bent
   normal, position, material/color ID. Several reuse the existing ray cast.
 - **[med] Output options:** 16-bit / EXR, flip-green (DirectX vs OpenGL), channel
