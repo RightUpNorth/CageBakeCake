@@ -114,3 +114,15 @@ def resolve(path, base):
     if not path:
         return path
     return path if os.path.isabs(path) else os.path.normpath(os.path.join(base, path))
+
+
+# --- recent files (most-recently-used list) --------------------------------
+def mru_add(recent, path, limit: int = 8) -> list:
+    """Return a new most-recently-used list with `path` moved to the front, de-duplicated
+    (case-insensitively on Windows via normcase) and capped at `limit`."""
+    key = os.path.normcase(os.path.abspath(path))
+    out = [path]
+    for p in recent:
+        if os.path.normcase(os.path.abspath(p)) != key:
+            out.append(p)
+    return out[:limit]

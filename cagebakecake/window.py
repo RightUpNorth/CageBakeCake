@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 from pyvistaqt import QtInteractor
-from qtpy.QtCore import QObject, QPoint, Qt, QThread, Signal
+from qtpy.QtCore import QObject, QPoint, Qt, QSettings, QThread, Signal
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,6 +30,7 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenuBar,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -116,6 +117,11 @@ class MainWindow(QMainWindow):
         # next _rebuild creates (and then cleared). None on a plain mesh open.
         self._pending_editor_state: dict | None = None
         self._project_path: str | None = None
+        # Recent files (QSettings-backed) + the clean cage-edit baseline for the
+        # unsaved-edits quit guard. Drag-and-drop opens meshes / projects.
+        self._settings = QSettings("CageBakeCake", "CageBakeCake")
+        self._saved_edits: dict | None = None
+        self.setAcceptDrops(True)
         self._title_bar: QWidget | None = None
         self._native_chrome = False  # win32 native frameless (Aero Snap kept)
 
@@ -269,6 +275,8 @@ class MainWindow(QMainWindow):
         file_menu = bar.addMenu("&File")
         file_menu.addAction("Open Low Poly...", self._open_low)
         file_menu.addAction("Open High Poly...", self._open_high)
+        self._recent_menu = file_menu.addMenu("Open Recent")
+        self._rebuild_recent_menu()
         file_menu.addSeparator()
         file_menu.addAction("Open Project...", self._open_project)
         file_menu.addAction("Save Project As...", self._save_project)
@@ -904,6 +912,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"CageBakeCake - {self._low_path}")
         self._asset_label.setText(f"- {os.path.basename(self._low_path)}")
         self._refresh_status_meta()
+        self._saved_edits = self._current_edit_sig()  # freshly loaded state is the clean baseline
 
     def _sync_dock(self) -> None:
         """Push the editor's current ranges/values into the dock widgets without
@@ -1185,8 +1194,19 @@ class MainWindow(QMainWindow):
         self._run_bake(compute, done, "Baking (this can take a while)...")
 
     def closeEvent(self, event):
-        """Stop a running bake cleanly before closing so the worker thread is not
-        destroyed mid-run."""
+        """Warn on unsaved cage edits, then stop a running bake cleanly before closing so
+        the worker thread is not destroyed mid-run."""
+        if (self.editor is not None and self._saved_edits is not None
+                and self._current_edit_sig() != self._saved_edits):
+            resp = QMessageBox.question(
+                self, "Unsaved cage edits",
+                "You have unsaved cage edits. Save them to a project before closing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+            if resp == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if resp == QMessageBox.Save:
+                self._save_project()
         self._closing = True
         if self._bake_busy and self._bake_thread is not None:
             self._cancel = True
@@ -1295,6 +1315,51 @@ class MainWindow(QMainWindow):
             self._low_path = path
             self._cage_path = None  # the cage tracks the low poly's topology
             self._rebuild()
+            self._remember_recent(path)
+
+    # --- recent files + drag-and-drop --------------------------------------
+    def _recent(self) -> list:
+        return [p for p in (self._settings.value("recent", []) or []) if p]
+
+    def _remember_recent(self, path: str) -> None:
+        self._settings.setValue("recent", project.mru_add(self._recent(), path))
+        self._rebuild_recent_menu()
+
+    def _rebuild_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        recent = self._recent()
+        if not recent:
+            act = self._recent_menu.addAction("(none)")
+            act.setEnabled(False)
+            return
+        for p in recent:
+            self._recent_menu.addAction(p, lambda _c=False, path=p: self._open_path(path))
+
+    @staticmethod
+    def _is_openable(path: str) -> bool:
+        return path.lower().endswith((".usd", ".usdc", ".usda", ".cbcproj"))
+
+    def _open_path(self, path: str) -> None:
+        """Open a mesh or project by path (recent menu / drag-and-drop)."""
+        if path.lower().endswith(".cbcproj"):
+            self._open_project_path(path)
+        else:
+            self._low_path = path
+            self._cage_path = None
+            self._rebuild()
+            self._remember_recent(path)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() and any(
+                self._is_openable(u.toLocalFile()) for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for u in event.mimeData().urls():
+            p = u.toLocalFile()
+            if self._is_openable(p):
+                self._open_path(p)
+                break
 
     def _open_high(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open High Poly", "", _USD_FILTER)
@@ -1333,15 +1398,19 @@ class MainWindow(QMainWindow):
         )
         project.save(path, doc)
         self._project_path = path
+        self._saved_edits = self._current_edit_sig()  # this state is now the clean baseline
+        self._remember_recent(path)
         self._set_status(f"Saved project -> {os.path.basename(path)}")
 
     def _open_project(self) -> None:
-        """Load a .cbcproj: restore the mesh paths, theme and recipe, then rebuild the
-        editor and apply the saved cage edits / skew / bake settings."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Project", "", _PROJECT_FILTER)
-        if not path:
-            return
+        if path:
+            self._open_project_path(path)
+
+    def _open_project_path(self, path: str) -> None:
+        """Load a .cbcproj: restore the mesh paths, theme and recipe, then rebuild the
+        editor and apply the saved cage edits / skew / bake settings."""
         try:
             data = project.load(path)
         except (OSError, ValueError) as exc:  # bad JSON / not a project
@@ -1365,7 +1434,16 @@ class MainWindow(QMainWindow):
         self._project_path = path
         self._rebuild()       # builds the editor and applies the staged edits
         self._apply_theme()   # re-skin for the restored direction/mood
+        self._remember_recent(path)
         self._set_status(f"Opened project {os.path.basename(path)}")
+
+    def _current_edit_sig(self):
+        """A signature of the cage edits (push + manual delta + skew) for the unsaved-edits
+        quit guard; bake settings / theme are excluded so tweaking them does not nag."""
+        ed = self.editor
+        if ed is None:
+            return None
+        return project.encode_edits(ed.global_push, ed.manual_delta, ed.skew, ed.skew_map)
 
     def _set_theme_axes(self, th: dict) -> None:
         """Set the direction/mood from a loaded project, reflecting them in the title-bar
