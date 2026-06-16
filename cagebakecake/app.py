@@ -29,7 +29,7 @@ import numpy as np
 import pyvista as pv
 import vtk
 
-from . import bake, cage, meshio, theme
+from . import autocage, bake, cage, meshio, theme
 
 BAKE_RESOLUTION = 1024
 
@@ -1706,6 +1706,48 @@ class CageEditor:
             return False
         self._baked_ao = image
         self._bake_status(f"Baked AO -> {job['out']}")
+        self.pl.render()
+        return True
+
+    def autosolve_inputs(self, resolution: int = 256) -> dict | None:
+        """Snapshot everything the cage auto-solver needs (on the main thread) so the heavy
+        probe + verify bakes can run on a worker thread without racing live edits. Arrays
+        the user can mutate (firing normals, base, low points) are copied; the immutable
+        high poly and its BVH are passed by reference. None if there is no high / no UVs.
+        Pairs with `apply_autosolve_result`. Solves in place (explode is a bake-time view)."""
+        if self.high is None or self._cached_low_uvs is None:
+            return None
+        kwargs = dict(
+            low_points=np.array(self.low.points, dtype=np.float64),
+            low_tris=self._cached_low_tris,
+            firing_normals=np.array(self.normals, dtype=np.float64),
+            high_points=self.high.points,
+            high_tris=self._cached_high_tris,
+            base_points=np.array(self.base, dtype=np.float64),
+            low_uvs=self._cached_low_uvs,
+            low_normals=self.hard_normals,
+            high_normals=np.asarray(self.high.point_normals, dtype=np.float64),
+            ray_mesh=self._get_ray_mesh(),
+            default_push=self.global_push,
+            resolution=int(resolution),
+        )
+        return {"kwargs": kwargs}
+
+    def apply_autosolve_result(self, d, job: dict) -> bool:
+        """Apply a solved per-vertex offset field on the main thread: write it into
+        manual_delta (a pure normal offset replacing any prior edits), recompose, push one
+        undo step, refresh the gizmo. Returns True on success, False if cancelled (d None)."""
+        if d is None:
+            self._bake_status("Auto-solve cancelled.")
+            self.pl.render()
+            return False
+        self.manual_delta = autocage.solve_manual_delta(d, self.normals, self.global_push)
+        self._recompose()
+        self._push_history()
+        if self.selected is not None:
+            self._build_gizmo(self.selected)
+            self._rebaseline()
+        self._bake_status("Auto-solved cage (re-bake to update the map).")
         self.pl.render()
         return True
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cagebakecake import bake
+from cagebakecake import autocage, bake
 
 
 def _uv_quad_usd(path, z=0.0):
@@ -90,3 +90,22 @@ def test_inputs_none_without_high(tmp_path):
         pytest.skip(f"headless render context unavailable: {exc}")
     assert ed.bake_inputs() is None
     assert ed.ao_inputs() is None
+    assert ed.autosolve_inputs() is None
+
+
+def test_autosolve_inputs_apply_round_trip(editor):
+    """The cage auto-solver follows the same snapshot/compute/apply split as the bakes: the
+    high quad sits 0.5 above the low, so the solved cage must ride out to enclose it."""
+    job = editor.autosolve_inputs(resolution=32)
+    assert job is not None
+    assert job["kwargs"]["firing_normals"] is not editor.normals  # mutable arrays copied
+
+    d = autocage.solve_offsets(**job["kwargs"])     # what the worker thread runs (pure)
+    assert editor.apply_autosolve_result(d, job) is True
+    assert editor.cage.points[:, 2].min() >= 0.5    # cage now encloses the high poly
+    assert len(editor._history) >= 2                # recorded as one undo step
+
+
+def test_apply_autosolve_cancelled_returns_false(editor):
+    job = editor.autosolve_inputs()
+    assert editor.apply_autosolve_result(None, job) is False
