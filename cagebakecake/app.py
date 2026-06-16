@@ -250,7 +250,18 @@ class CageEditor:
         self._hover_picker.AddPickList(self.cage_actor)
         self._hover_picker.PickFromListOn()
         self.pl.add_axes()
+        self._set_sky(c)
+
+    def _set_sky(self, c: dict) -> None:
+        """Paint the viewport background as a radial sky: the lighter sky_top glows from
+        the center out to the darker sky_bottom at the corners (a soft studio dome),
+        rather than a flat fill or a plain top-to-bottom band. ``set_background`` makes
+        sky_top the gradient's second color, which radial mode places at the center."""
         self.pl.set_background(c["sky_bottom"], top=c["sky_top"])
+        ren = self.pl.renderer
+        ren.SetGradientMode(
+            vtk.vtkViewport.GradientModes.VTK_GRADIENT_RADIAL_VIEWPORT_FARTHEST_CORNER)
+        ren.GradientBackgroundOn()
 
     def set_theme(self, key: str) -> None:
         """Recolor the viewport to the given palette key (the cage surface/points/
@@ -261,7 +272,7 @@ class CageEditor:
         self.cage_actor.prop.color = c["cage"]
         self._cage_pts_actor.prop.color = c["cage_points"]
         self._cage_wire_actor.prop.color = c["cage_wire"]
-        self.pl.set_background(c["sky_bottom"], top=c["sky_top"])
+        self._set_sky(c)
         self.pl.render()
 
     # --- display modes (low / high material, normal map, cage, normals) -----
