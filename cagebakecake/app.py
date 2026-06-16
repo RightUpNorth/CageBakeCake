@@ -76,7 +76,11 @@ class CageEditor:
         self.skew = 1.0  # uniform skew value (the slider); 0 = hard, 1 = soft
         # Per-vertex skew weights so skew can be painted per region (default uniform).
         self.skew_map = np.full(len(self.hard_normals), self.skew, dtype=np.float64)
-        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
+        # Per-vertex firing-direction tilt the auto-solver writes to aim rays into overhangs
+        # the skew blend cannot reach (zero = fire along the skew-blended normal). Composes
+        # on top of the skew blend, like manual_delta does on top of the cage push.
+        self.aim_delta = np.zeros((len(self.hard_normals), 3), dtype=np.float64)
+        self._compose_normals()
         if high_path:
             high_scene = meshio.load_scene(high_path, with_uvs=False)
             self.high = high_scene["merged"]
@@ -253,6 +257,16 @@ class CageEditor:
         self.cage.points = cage.compose(
             self.base, self.normals, self.global_push, self.manual_delta
         )
+
+    def _compose_normals(self) -> None:
+        """Firing normals = the skew blend of the hard/soft normals, tilted by the
+        auto-solver's per-vertex aim delta (zero by default), renormalized. The tilt aims
+        the bake rays into overhangs the pure-normal direction cannot reach; it does not
+        touch the encode frame (the hard shading normals), so the baked map stays
+        undistorted."""
+        blended = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
+        firing = blended + self.aim_delta
+        self.normals = firing / (np.linalg.norm(firing, axis=1, keepdims=True) + 1e-12)
 
     def _add_actors(self) -> None:
         # Low and high meshes go through the style helpers so their material switch is one
@@ -1120,7 +1134,7 @@ class CageEditor:
 
     def _reblend_skew(self) -> None:
         """Recompute firing normals from the skew map and recompose; keep the gizmo on."""
-        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
+        self._compose_normals()
         self._recompose()
         if self.selected is not None:
             self._build_gizmo(self.selected)
@@ -1326,7 +1340,7 @@ class CageEditor:
         from . import project
 
         st = project.encode_edits(
-            self.global_push, self.manual_delta, self.skew, self.skew_map)
+            self.global_push, self.manual_delta, self.skew, self.skew_map, self.aim_delta)
         st.update(
             bake_size=[int(self._bake_size[0]), int(self._bake_size[1])],
             supersample=int(self._supersample),
@@ -1350,17 +1364,18 @@ class CageEditor:
         self.set_ao_samples(st.get("ao_samples", self._ao_samples))
         self.set_explode(st.get("explode", self._explode))
         self.set_flip_green(st.get("flip_green", self._flip_green))
-        push, manual, skew, skew_map, matched = project.decode_edits(
+        push, manual, skew, skew_map, aim, matched = project.decode_edits(
             st, len(self.manual_delta))
         if push is not None:
             self.global_push = float(push)
         if matched:
             self.manual_delta = manual
+            self.aim_delta = aim
         self.skew = skew
         self.skew_map = skew_map
-        # Recompute the firing normals from the restored skew, recompose the cage, and
-        # reset the undo history so the restored state is the new baseline.
-        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
+        # Recompute the firing normals from the restored skew + aim tilt, recompose the
+        # cage, and reset the undo history so the restored state is the new baseline.
+        self._compose_normals()
         self._recompose()
         self._history = [self.manual_delta.copy()]
         self._hist_index = 0
@@ -1717,10 +1732,14 @@ class CageEditor:
         Pairs with `apply_autosolve_result`. Solves in place (explode is a bake-time view)."""
         if self.high is None or self._cached_low_uvs is None:
             return None
+        # Solve from the un-aimed skew-blended normal so a re-solve starts fresh rather than
+        # compounding a previous tilt; the result's firing direction replaces aim_delta.
+        base_firing = cage.blend_normals(
+            self.hard_normals, self.soft_normals, self.skew_map)
         kwargs = dict(
             low_points=np.array(self.low.points, dtype=np.float64),
             low_tris=self._cached_low_tris,
-            firing_normals=np.array(self.normals, dtype=np.float64),
+            firing_normals=np.array(base_firing, dtype=np.float64),
             high_points=self.high.points,
             high_tris=self._cached_high_tris,
             base_points=np.array(self.base, dtype=np.float64),
@@ -1731,17 +1750,22 @@ class CageEditor:
             default_push=self.global_push,
             resolution=int(resolution),
         )
-        return {"kwargs": kwargs}
+        return {"kwargs": kwargs, "base_firing": np.array(base_firing, dtype=np.float64)}
 
-    def apply_autosolve_result(self, d, job: dict) -> bool:
-        """Apply a solved per-vertex offset field on the main thread: write it into
-        manual_delta (a pure normal offset replacing any prior edits), recompose, push one
-        undo step, refresh the gizmo. Returns True on success, False if cancelled (d None)."""
-        if d is None:
+    def apply_autosolve_result(self, result, job: dict) -> bool:
+        """Apply a solved cage on the main thread. `result` is autocage.solve's
+        ``{"offsets", "firing"}``: the firing direction becomes the aim delta (tilt off the
+        skew blend) and the offsets become manual_delta along it, replacing any prior edits.
+        Recompose, push one undo step, refresh the gizmo. Returns False if cancelled."""
+        if result is None:
             self._bake_status("Auto-solve cancelled.")
             self.pl.render()
             return False
-        self.manual_delta = autocage.solve_manual_delta(d, self.normals, self.global_push)
+        firing = np.asarray(result["firing"], dtype=np.float64)
+        self.aim_delta = firing - job["base_firing"]   # base_firing + aim_delta == firing
+        self._compose_normals()                        # self.normals now follows firing
+        self.manual_delta = autocage.solve_manual_delta(
+            result["offsets"], self.normals, self.global_push)
         self._recompose()
         self._push_history()
         if self.selected is not None:

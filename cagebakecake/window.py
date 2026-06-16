@@ -1212,7 +1212,7 @@ class MainWindow(QMainWindow):
             return
 
         def compute(emit):
-            return autocage.solve_offsets(**job["kwargs"], progress=emit)
+            return autocage.solve(**job["kwargs"], progress=emit)
 
         def done(result):
             if isinstance(result, Exception):
@@ -1481,12 +1481,14 @@ class MainWindow(QMainWindow):
         self._set_status(f"Opened project {os.path.basename(path)}")
 
     def _current_edit_sig(self):
-        """A signature of the cage edits (push + manual delta + skew) for the unsaved-edits
-        quit guard; bake settings / theme are excluded so tweaking them does not nag."""
+        """A signature of the cage edits (push + manual delta + skew + aim tilt) for the
+        unsaved-edits quit guard; bake settings / theme are excluded so tweaking them does
+        not nag."""
         ed = self.editor
         if ed is None:
             return None
-        return project.encode_edits(ed.global_push, ed.manual_delta, ed.skew, ed.skew_map)
+        return project.encode_edits(
+            ed.global_push, ed.manual_delta, ed.skew, ed.skew_map, ed.aim_delta)
 
     def _set_theme_axes(self, th: dict) -> None:
         """Set the direction/mood from a loaded project, reflecting them in the title-bar

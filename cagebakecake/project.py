@@ -29,40 +29,51 @@ VERSION = 1
 
 
 # --- per-vertex edit encoding (pure, mesh-size-tied) -----------------------
-def encode_edits(global_push, manual_delta, skew, skew_map) -> dict:
-    """Sparse, JSON-able encoding of the cage edits. manual_delta -> its nonzero rows as
-    [index, dx, dy, dz]; skew_map -> only entries that differ from the uniform skew as
-    [index, value]. vertex_count pins the encoding to its mesh."""
+def encode_edits(global_push, manual_delta, skew, skew_map, aim_delta=None) -> dict:
+    """Sparse, JSON-able encoding of the cage edits. manual_delta and aim_delta (the
+    auto-solver's firing tilt) -> their nonzero rows as [index, dx, dy, dz]; skew_map ->
+    only entries that differ from the uniform skew as [index, value]. vertex_count pins the
+    encoding to its mesh."""
     md = np.asarray(manual_delta, dtype=np.float64)
     nz = np.nonzero(np.any(md != 0.0, axis=1))[0]
     sk = np.asarray(skew_map, dtype=np.float64)
     dev = np.nonzero(sk != float(skew))[0]
-    return {
+    out = {
         "vertex_count": int(len(md)),
         "global_push": float(global_push),
         "skew": float(skew),
         "manual_delta": [[int(i), *md[i].tolist()] for i in nz],
         "skew_map": [[int(i), float(sk[i])] for i in dev],
     }
+    if aim_delta is not None:
+        ad = np.asarray(aim_delta, dtype=np.float64)
+        az = np.nonzero(np.any(ad != 0.0, axis=1))[0]
+        if len(az):
+            out["aim_delta"] = [[int(i), *ad[i].tolist()] for i in az]
+    return out
 
 
 def decode_edits(d: dict, n: int):
     """Inverse of encode_edits for a mesh of n vertices. Returns
-    (global_push, manual_delta (n,3), skew, skew_map (n,), matched) where matched is False
-    when the stored vertex_count != n - then the per-vertex arrays come back as a
-    uniform-skew / zero-delta default (the scalars still apply). global_push is None when
-    the document did not record one (keep the editor's default)."""
+    (global_push, manual_delta (n,3), skew, skew_map (n,), aim_delta (n,3), matched) where
+    matched is False when the stored vertex_count != n - then the per-vertex arrays come
+    back as a uniform-skew / zero-delta default (the scalars still apply). global_push is
+    None when the document did not record one (keep the editor's default). aim_delta is
+    absent in projects saved before the firing-tilt solver and decodes to zeros."""
     skew = float(d.get("skew", 1.0))
     global_push = d.get("global_push")
     matched = int(d.get("vertex_count", -1)) == int(n)
     manual = np.zeros((n, 3), dtype=np.float64)
+    aim = np.zeros((n, 3), dtype=np.float64)
     skew_map = np.full(n, skew, dtype=np.float64)
     if matched:
         for i, dx, dy, dz in d.get("manual_delta", []):
             manual[int(i)] = (dx, dy, dz)
         for i, v in d.get("skew_map", []):
             skew_map[int(i)] = float(v)
-    return global_push, manual, skew, skew_map, matched
+        for i, dx, dy, dz in d.get("aim_delta", []):
+            aim[int(i)] = (dx, dy, dz)
+    return global_push, manual, skew, skew_map, aim, matched
 
 
 # --- document build / parse ------------------------------------------------

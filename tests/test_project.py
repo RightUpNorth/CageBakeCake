@@ -27,15 +27,16 @@ def test_encode_is_sparse_and_round_trips():
     assert d["manual_delta"] == [[2, 0.1, 0.2, 0.3], [4, -1.0, 0.0, 0.0]]
     assert d["skew_map"] == [[1, 0.25]]  # only the deviation from the uniform skew
 
-    push, md2, skew, sk2, matched = project.decode_edits(d, n)
+    push, md2, skew, sk2, aim2, matched = project.decode_edits(d, n)
     assert matched and push == 0.5 and skew == 1.0
     np.testing.assert_allclose(md2, md)
     np.testing.assert_allclose(sk2, skew_map)
+    assert not aim2.any()                            # no firing tilt encoded
 
 
 def test_decode_vertex_mismatch_skips_per_vertex_but_keeps_scalars():
     d = project.encode_edits(0.3, np.eye(4, 3), 0.5, np.full(4, 0.5))
-    push, md, skew, sk, matched = project.decode_edits(d, 6)  # different mesh
+    push, md, skew, sk, aim, matched = project.decode_edits(d, 6)  # different mesh
     assert not matched
     assert md.shape == (6, 3) and not md.any()       # per-vertex edits dropped
     assert skew == 0.5 and np.all(sk == 0.5)         # uniform skew default
@@ -45,6 +46,24 @@ def test_decode_vertex_mismatch_skips_per_vertex_but_keeps_scalars():
 def test_decode_missing_push_is_none():
     push, *_ = project.decode_edits({"vertex_count": 3, "skew": 1.0}, 3)
     assert push is None
+
+
+def test_aim_delta_round_trips():
+    n = 5
+    aim = np.zeros((n, 3))
+    aim[3] = [0.0, 0.1, -0.2]
+    d = project.encode_edits(0.2, np.zeros((n, 3)), 1.0, np.full(n, 1.0), aim)
+    assert d["aim_delta"] == [[3, 0.0, 0.1, -0.2]]   # only the nonzero tilt rows
+    *_, aim2, matched = project.decode_edits(d, n)
+    assert matched
+    np.testing.assert_allclose(aim2, aim)
+
+
+def test_aim_delta_absent_decodes_to_zero():
+    d = project.encode_edits(0.2, np.zeros((3, 3)), 1.0, np.full(3, 1.0))  # no aim passed
+    assert "aim_delta" not in d                       # nothing to store
+    *_, aim, matched = project.decode_edits(d, 3)
+    assert matched and not aim.any()                  # pre-tilt projects decode to zero
 
 
 def test_document_json_round_trip(tmp_path):

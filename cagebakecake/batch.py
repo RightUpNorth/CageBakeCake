@@ -44,15 +44,21 @@ def _build_cage(low, cage_path, edits, push):
     n = len(hard)
     skew_map = np.full(n, 1.0)
     manual = np.zeros((n, 3))
+    aim = np.zeros((n, 3))
     gp = push
     if edits:
-        gp2, manual2, _skew, skew_map2, matched = project.decode_edits(edits, n)
+        gp2, manual2, _skew, skew_map2, aim2, matched = project.decode_edits(edits, n)
         skew_map = skew_map2
         if matched:
             manual = manual2
+            aim = aim2
         if push is None:
             gp = gp2
-    normals = cage.blend_normals(hard, soft, skew_map)
+    # Firing normals = the skew blend tilted by the auto-solver's aim delta (matches
+    # CageEditor._compose_normals so a baked project reproduces the interactive cage).
+    blended = cage.blend_normals(hard, soft, skew_map)
+    firing = blended + aim
+    normals = firing / (np.linalg.norm(firing, axis=1, keepdims=True) + 1e-12)
     base = _load_cage_base(low.points, normals, cage_path)
     if gp is None:
         gp = float(np.linalg.norm(np.ptp(base, axis=0))) * 0.03

@@ -100,8 +100,8 @@ def test_autosolve_inputs_apply_round_trip(editor):
     assert job is not None
     assert job["kwargs"]["firing_normals"] is not editor.normals  # mutable arrays copied
 
-    d = autocage.solve_offsets(**job["kwargs"])     # what the worker thread runs (pure)
-    assert editor.apply_autosolve_result(d, job) is True
+    result = autocage.solve(**job["kwargs"])        # what the worker thread runs (pure)
+    assert editor.apply_autosolve_result(result, job) is True
     assert editor.cage.points[:, 2].min() >= 0.5    # cage now encloses the high poly
     assert len(editor._history) >= 2                # recorded as one undo step
 
