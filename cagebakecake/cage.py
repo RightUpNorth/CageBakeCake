@@ -199,6 +199,39 @@ def blend_normals(
     return blended / (norm + 1e-12)
 
 
+def reflect_axis(vectors: np.ndarray, axis: str) -> np.ndarray:
+    """Reflect vectors across the plane perpendicular to a world axis ('x'/'y'/'z') by
+    flipping that axis's component. Works on a single (3,) vector or an (N,3) array.
+    Used for symmetric cage editing: a displacement on one side reflects to the mirror."""
+    k = {"x": 0, "y": 1, "z": 2}[axis]
+    v = np.array(vectors, dtype=np.float64, copy=True)
+    v[..., k] = -v[..., k]
+    return v
+
+
+def mirror_index(points: np.ndarray, axis: str, tol_factor: float = 1e-4) -> np.ndarray:
+    """For each point, the index of the point mirrored across the mesh's symmetry plane
+    (the bounding-box midplane perpendicular to `axis`), or -1 if there is no match within
+    tolerance. This pairs a cage vertex with its opposite so an edit on one side can be
+    copied to the other (symmetric editing). O(V) via a quantized-coordinate lookup.
+
+    Assumes the cage is symmetric about its bbox centre on `axis` - the usual case for a
+    cage built from a symmetric low poly; asymmetric vertices simply get -1 (no mirror).
+    """
+    k = {"x": 0, "y": 1, "z": 2}[axis]
+    b = np.asarray(points, dtype=np.float64)
+    extent = float(np.linalg.norm(np.ptp(b, axis=0))) or 1.0
+    center = 0.5 * (b[:, k].min() + b[:, k].max())
+    mirrored = b.copy()
+    mirrored[:, k] = 2.0 * center - mirrored[:, k]
+    q = extent * tol_factor
+    table = {tuple(row): i for i, row in enumerate(np.round(b / q).astype(np.int64))}
+    out = np.full(len(b), -1, dtype=np.int64)
+    for i, row in enumerate(np.round(mirrored / q).astype(np.int64)):
+        out[i] = table.get(tuple(row), -1)
+    return out
+
+
 def tangent_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Two orthonormal vectors spanning the tangent plane perpendicular to normal."""
     n = np.asarray(normal, dtype=np.float64)

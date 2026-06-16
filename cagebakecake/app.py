@@ -156,6 +156,7 @@ class CageEditor:
         self._axis_len = diag * 0.14
         self.soft_radius = diag * 0.1
         self._push_max = diag * 0.3
+        self._brush_scale = diag * 0.02  # world units pushed per brush application at full strength
 
         # Display modes. Low and high carry independent material switches (wireframe vs a
         # lit PBR material); the low poly can additionally show the baked normal map so the
@@ -179,6 +180,16 @@ class CageEditor:
         self._paint_skew = False    # paint mode: left-drag paints skew instead of selecting
         self._paint_value = 0.0     # brush target skew (0 = hard, 1 = soft)
         self._painting = False
+        # Push/inflate brush: left-drag pushes the cage out (or in) along the normals in
+        # the soft-radius region under the cursor, writing into manual_delta. Mutually
+        # exclusive with skew paint (both claim the left-drag).
+        self._push_brush = False
+        self._push_strength = 0.3   # [-1, 1]; negative deflates, positive inflates
+        self._painting_push = False
+        # Symmetric editing: an edit on one side is mirrored across a world axis plane.
+        self._symmetry: str | None = None      # None | "x" | "y" | "z"
+        self._mirror: np.ndarray | None = None  # cached mirror-vertex map for _mirror_axis
+        self._mirror_axis: str | None = None
         self._bake_size = (BAKE_RESOLUTION, BAKE_RESOLUTION)  # (width, height); set by the dock
         self._supersample = 1   # anti-alias multiple (bake at NxN, average down)
         self._padding = 0       # UV-island edge padding in texels (0 = none)
@@ -701,6 +712,15 @@ class CageEditor:
             self._suppress_camera(True)
             self._abort(obj, self._press_tag)
             return
+        if self._push_brush:
+            # Push brush: left-drag inflates/deflates the cage under the cursor.
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.push_brush_at(self._mesh_picker.GetPickPosition())
+                self._painting_push = True
+                self._suppress_camera(True)
+                self._abort(obj, self._press_tag)
+            return
         if self._paint_skew:
             # Paint mode: left-drag paints the brush skew onto the mesh under the cursor.
             self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
@@ -737,7 +757,11 @@ class CageEditor:
             cx, cy = self._click_deselect
             if abs(x - cx) + abs(y - cy) > 4:
                 self._click_deselect = None  # it became an orbit, not a click
-        if self._painting:
+        if self._painting_push:
+            self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
+            if self._mesh_picker.GetCellId() >= 0:
+                self.push_brush_at(self._mesh_picker.GetPickPosition())
+        elif self._painting:
             self._mesh_picker.Pick(x, y, 0, self.pl.renderer)
             if self._mesh_picker.GetCellId() >= 0:
                 self.paint_skew_at(self._mesh_picker.GetPickPosition(), self._paint_value)
@@ -753,6 +777,12 @@ class CageEditor:
     def _on_release(self, obj, _event) -> None:
         # Only fires for us during a handle / environment drag (the temporary
         # vtkInteractorStyleUser does not swallow release like pyvista's capture style).
+        if self._painting_push:
+            self._painting_push = False
+            self._suppress_camera(False)
+            self._abort(obj, self._release_tag)
+            self._push_history()  # commit the whole stroke as one undo step
+            return
         if self._painting:
             self._painting = False
             self._suppress_camera(False)
@@ -789,6 +819,7 @@ class CageEditor:
         self.manual_delta[self._aff_idx] = (
             self._md0[self._aff_idx] + self._aff_w[:, None] * move[None, :]
         )
+        self._apply_symmetry(self._aff_idx)  # mirror the edit when symmetry is on
         self._recompose()
         delta = self.cage.points[i] - self._giz_anchor
         for actor in self._giz.values():
@@ -1042,11 +1073,78 @@ class CageEditor:
         self._reblend_skew()
 
     def set_paint_skew(self, on: bool) -> None:
-        """Toggle skew paint mode (left-drag on the mesh paints the brush value)."""
+        """Toggle skew paint mode (left-drag on the mesh paints the brush value).
+        Turning it on turns the push brush off - the two left-drag brushes are exclusive."""
         self._paint_skew = bool(on)
+        if self._paint_skew:
+            self._push_brush = False
 
     def set_paint_value(self, value: float) -> None:
         self._paint_value = float(np.clip(value, 0.0, 1.0))
+
+    # --- push/inflate brush + symmetry -------------------------------------
+    def set_push_brush(self, on: bool) -> None:
+        """Toggle push-brush mode (left-drag on the mesh inflates/deflates the cage).
+        Turning it on turns skew paint off - the two left-drag brushes are exclusive."""
+        self._push_brush = bool(on)
+        if self._push_brush:
+            self._paint_skew = False
+
+    def set_push_strength(self, value: float) -> None:
+        """Brush strength in [-1, 1]: negative deflates (pulls the cage in), positive
+        inflates (pushes it out). Scaled by the mesh size per application."""
+        self._push_strength = float(np.clip(value, -1.0, 1.0))
+
+    def push_brush_at(self, point, amount: float | None = None,
+                      radius: float | None = None) -> None:
+        """Inflate/deflate the cage in the soft-radius region under `point`: push each
+        affected vertex along its normal by amount*weight, accumulated into manual_delta
+        (so it composes with the global offset and is undoable). `amount` defaults to the
+        brush strength scaled by the mesh size; mirrors across the symmetry plane."""
+        radius = self.soft_radius if radius is None else float(radius)
+        amount = (self._push_strength * self._brush_scale
+                  if amount is None else float(amount))
+        idx, w = cage.soft_weights(
+            self.cage.points, np.asarray(point, dtype=np.float64), radius)
+        if len(idx) == 0:
+            return
+        self.manual_delta[idx] += self.normals[idx] * (amount * w[:, None])
+        self._apply_symmetry(idx)
+        self._recompose()
+        self._gizmo_follow()
+        if self._soft_poly is not None and self.selected is not None:
+            self._soft_poly.points = self.cage.points[self._aff_idx]
+        self.pl.render()
+
+    def set_symmetry(self, axis: str | None) -> None:
+        """Enable mirror editing across a world axis plane ('x'/'y'/'z'), or None to turn
+        it off. A subsequent gizmo drag or brush stroke is reflected to the opposite side
+        of the cage."""
+        self._symmetry = axis if axis in ("x", "y", "z") else None
+
+    def _mirror_map(self) -> np.ndarray | None:
+        """The cached mirror-vertex map for the active symmetry axis, built on first use
+        (and rebuilt if the axis changes)."""
+        if self._symmetry is None:
+            return None
+        if self._mirror is None or self._mirror_axis != self._symmetry:
+            self._mirror = cage.mirror_index(self.base, self._symmetry)
+            self._mirror_axis = self._symmetry
+        return self._mirror
+
+    def _apply_symmetry(self, idx) -> None:
+        """Mirror the manual delta of vertices `idx` onto their counterparts across the
+        symmetry plane (full symmetry: the touched side's edit is reflected to the other).
+        A no-op when symmetry is off or a vertex has no mirror / mirrors to itself."""
+        mp = self._mirror_map()
+        if mp is None:
+            return
+        src = np.asarray(idx, dtype=np.int64).ravel()
+        dst = mp[src]
+        keep = (dst >= 0) & (dst != src)
+        s, d = src[keep], dst[keep]
+        if len(s):
+            self.manual_delta[d] = cage.reflect_axis(self.manual_delta[s], self._symmetry)
 
     # --- create cage --------------------------------------------------------
     def _create_cage(self) -> None:

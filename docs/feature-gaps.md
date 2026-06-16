@@ -37,11 +37,17 @@ Current editing is: one global push slider, per-vertex gizmo (normal / tangent /
 soft-select falloff, and paintable skew. Strong start; the gaps are the high-leverage
 brushes and selection tools artists expect.
 
-- **[high] Push / inflate brush.** Paint the cage offset directly onto the surface
-  (drag to inflate the region under the cursor) instead of per-vertex gizmo work. The
-  soft-weight + paint infrastructure for skew already exists and could back it.
-- **[high] Symmetry / mirror editing** (X/Y/Z). Cages are usually symmetric; editing
-  one side and mirroring is a major time saver.
+- **[high] Push / inflate brush. (DONE)** `CageEditor.push_brush_at` + the "Push brush"
+  dock toggle/strength slider paint the cage offset directly: left-drag pushes the
+  soft-radius region under the cursor out (or in, with a negative strength) along the
+  normals, accumulated into `manual_delta` so it composes with the global offset and is a
+  single undo step. Backed by the existing soft-weight infrastructure; mutually exclusive
+  with skew paint.
+- **[high] Symmetry / mirror editing (X/Y/Z). (DONE)** `set_symmetry` + the "Symmetry"
+  segmented control mirror an edit to the opposite side: `cage.mirror_index` pairs each
+  cage vertex with its counterpart across the bbox midplane (O(V) quantized lookup), and
+  every gizmo drag / brush stroke reflects the touched side's `manual_delta` onto its
+  mirror (`cage.reflect_axis`). Asymmetric vertices with no partner are left untouched.
 - **[med] Multi-vertex selection** (box / lasso / paint-select) so a region can be
   pushed together without soft-select falloff.
 - **[med] Smooth / relax brush** for the cage, to remove the lumps local edits create.
