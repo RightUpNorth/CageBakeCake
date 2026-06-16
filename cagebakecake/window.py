@@ -41,7 +41,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import bake, chrome, project, recipe, theme, uvlayout, win_chrome
+from . import autocage, bake, chrome, project, recipe, theme, uvlayout, win_chrome
 from .app import CageEditor
 from .imageview import ImageView
 from .widgets import (
@@ -365,6 +365,14 @@ class MainWindow(QMainWindow):
         self._offset.valueChanged.connect(self._on_offset)
         self._offset_label = QLabel("-")
         f.addRow(_slider_field("Cage offset", self._offset, self._offset_label))
+
+        # Auto-solve: fit a per-vertex cage that encloses the high poly (no poke-through),
+        # as a starting point the artist refines by hand. Runs on the bake worker thread.
+        f.addRow(_helper("Auto-solve fits the cage around the high poly so the bake has no "
+                         "poke-through, then refine by hand and re-bake."))
+        self._autosolve_btn = QPushButton("Auto-solve cage")
+        self._autosolve_btn.clicked.connect(self._autosolve)
+        f.addRow(self._autosolve_btn)
 
         self._skew = QSlider(Qt.Horizontal)
         self._skew.setObjectName("amberSlider")  # the design fills Skew with accent2
@@ -1193,6 +1201,30 @@ class MainWindow(QMainWindow):
             self._refresh_preview()
 
         self._run_bake(compute, done, "Baking (this can take a while)...")
+
+    def _autosolve(self) -> None:
+        """Auto-solve the cage so it encloses the high poly, on the bake worker thread
+        (it probes rays and runs low-res verify bakes). Applies the solved offsets as a
+        normal cage edit the artist can then refine; does not bake the map."""
+        job = self.editor.autosolve_inputs()
+        if job is None:
+            self._set_status("Auto-solve needs a high poly with UVs.")
+            return
+
+        def compute(emit):
+            return autocage.solve_offsets(**job["kwargs"], progress=emit)
+
+        def done(result):
+            if isinstance(result, Exception):
+                self._set_status(f"Auto-solve failed: {result}")
+                return
+            ok = self.editor.apply_autosolve_result(result, job)
+            self._sync_dock()
+            self._set_status(
+                "Cage auto-solved. Refine if needed, then Bake / Re-bake." if ok
+                else "Auto-solve cancelled.")
+
+        self._run_bake(compute, done, "Auto-solving cage (casting rays)...")
 
     def closeEvent(self, event):
         """Warn on unsaved cage edits, then stop a running bake cleanly before closing so
