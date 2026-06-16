@@ -152,8 +152,12 @@ Still open:
 
 ## G. Workflow / automation
 
-- **[med] Batch / CLI bake** of many asset pairs without the GUI (the headless core
-  already supports it; needs a CLI surface beyond `--screenshot`).
+- **[med] Batch / CLI bake. (DONE)** `cagebakecake/batch.py` bakes straight from
+  meshio + cage + bake with no window and no GL: `bake_pair` bakes a low/high (+ optional
+  cage) pair to per-type PNGs (`--bake --maps normal,objnormal,ao,curv --size --ss
+  --padding --flip-green --out`), and `bake_project` re-bakes a saved `.cbcproj`'s recipe
+  with its cage edits and bake settings (`--bake-project shot.cbcproj`). Both exit without
+  opening the GUI, so they run in a pipeline / CI. Headless-tested + a CLI smoke.
 - **[low] Camera bookmarks / standard orthographic views**, isolation mode,
   backface-culling toggle.
 
