@@ -181,6 +181,7 @@ class CageEditor:
         self._baked_obj_normal: np.ndarray | None = None  # last object-space normal bake
         self._baked_height: np.ndarray | None = None   # last height/displacement bake
         self._baked_position: np.ndarray | None = None  # last world-position bake
+        self._baked_thickness: np.ndarray | None = None  # last thickness bake
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
         self._face_miss: np.ndarray | None = None      # per-low-face miss class (0/1/2) for the 3D overlay
         self._miss_overlay_on = False
@@ -1599,6 +1600,24 @@ class CageEditor:
         if image is not None:
             self._baked_position = image
 
+    def _bake_thickness(self, out_path: str | None = None, write: bool = True,
+                        progress=None) -> None:
+        """Bake a thickness map (inward distance to the far wall) to memory and optionally
+        disk. `write=False` is memory-only (recipe)."""
+        if self.high is None or self._cached_low_uvs is None:
+            return
+        w, h = self._bake_size
+        low_p, cage_p, high_p, ray_mesh = self._exploded_geometry()
+        out = out_path or (os.path.splitext(os.path.basename(self._low_path))[0]
+                           + "_thickness.png" if write else None)
+        image = bake.bake_thickness(
+            low_p, self._cached_low_tris, self.hard_normals, self._cached_low_uvs,
+            cage_p, high_p, self._cached_high_tris, resolution=(w, h),
+            firing_normals=self.normals, padding=self._padding, ray_mesh=ray_mesh,
+            out_path=out, progress=progress or (lambda m: print(f"[thickness] {m}")))
+        if image is not None:
+            self._baked_thickness = image
+
     # --- threaded bake: pure compute inputs + main-thread apply -------------
     def bake_inputs(self, resolution=None) -> dict | None:
         """Snapshot everything a normal bake needs (on the calling/main thread) so the
@@ -1773,13 +1792,18 @@ class CageEditor:
             self._bake_position(progress=progress, write=False)
             if cancelled():
                 return None
+        if "thickness" in kinds:
+            self._bake_thickness(progress=progress, write=False)
+            if cancelled():
+                return None
         if "curv" in kinds and self._baked_image is not None:
             self._bake_curvature(write=False)
 
         # Map each recipe bake map to its baked buffer (object-space normals resolve to
         # the object bake, tangent to the tangent bake; non-bakeable kinds stay empty).
         by_kind = {"ao": self._baked_ao, "curv": self._baked_curv,
-                   "height": self._baked_height, "position": self._baked_position}
+                   "height": self._baked_height, "position": self._baked_position,
+                   "thickness": self._baked_thickness}
         baked = {}
         for m in rec.bake_maps:
             if m.kind == "normal":
@@ -1827,6 +1851,8 @@ class CageEditor:
             maps.append(("Height", self._baked_height))
         if self._baked_position is not None:
             maps.append(("Position", self._baked_position))
+        if self._baked_thickness is not None:
+            maps.append(("Thickness", self._baked_thickness))
         if self._baked_miss is not None:
             maps.append(("Ray miss", self._baked_miss))
         for fname, img in self._packed_outputs.items():

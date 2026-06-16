@@ -21,7 +21,7 @@ from . import theme
 
 # Kinds that the current bake pipeline can actually produce. The rest are modeled
 # (so presets and the UI are faithful to the handoff) but pack as empty channels.
-BAKEABLE_KINDS = ("normal", "ao", "curv", "height", "position")
+BAKEABLE_KINDS = ("normal", "ao", "curv", "height", "position", "thickness")
 
 
 @dataclass

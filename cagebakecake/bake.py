@@ -504,6 +504,46 @@ def bake_position(low_points, low_tris, low_normals, low_uvs, cage_points, high_
     return image
 
 
+def bake_thickness(low_points, low_tris, low_normals, low_uvs, cage_points, high_points,
+                   high_tris, resolution=1024, firing_normals=None, padding=0, ray_mesh=None,
+                   out_path=None, progress=None, value_range=None):
+    """Bake a thickness map: per texel, fire a ray from the low surface *inward* (along the
+    -shading normal) and measure the distance to the far wall of the high poly, normalized
+    to [0,1] over `value_range` (default the high bbox diagonal). Brighter is thicker;
+    background (no back wall) stays black. Useful for subsurface / translucency masks."""
+    notify = progress or (lambda _m: None)
+    width, height = (resolution, resolution) if isinstance(resolution, int) else (
+        int(resolution[0]), int(resolution[1]))
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    g = _texel_geometry(low_points, low_tris, low_normals, low_uvs, cage_points,
+                        firing_normals, width, height)
+    if g is None:
+        if out_path:
+            _write_png(out_path, image)
+        return image
+    surf, shade = g["surf"], g["shade"]
+    hp = np.asarray(high_points, dtype=np.float64)
+    diag = float(np.linalg.norm(np.ptp(hp, axis=0))) or 1.0
+    eps = diag * 1e-4 + 1e-9
+    mesh = ray_mesh if ray_mesh is not None else make_ray_mesh(high_points, high_tris)
+    loc, mask = _cast_locations(surf - shade * eps, -shade, np.full(len(surf), diag),
+                                high_points, high_tris, mesh)
+    thick = np.linalg.norm(loc - surf, axis=1)
+    rng = value_range if value_range else diag
+    gray = np.clip(thick / rng, 0.0, 1.0)
+    hit_yx = g["yx"][mask]
+    val = np.clip(np.round(gray[mask] * 255.0), 0, 255).astype(np.uint8)
+    image[hit_yx[:, 0], hit_yx[:, 1]] = np.repeat(val[:, None], 3, axis=1)
+    notify(f"thickness: {int(mask.sum())}/{len(g['yx'])} texels hit")
+    if padding > 0:
+        m = np.zeros((height, width), dtype=bool)
+        m[hit_yx[:, 0], hit_yx[:, 1]] = True
+        image = _pad_islands(image, m, int(padding))
+    if out_path:
+        _write_png(out_path, image)
+    return image
+
+
 # --- ray-miss / projection feedback ----------------------------------------
 def _miss_map(yx, hit_mask, covered, ss: int, width: int, height: int,
               poke=None) -> np.ndarray:
