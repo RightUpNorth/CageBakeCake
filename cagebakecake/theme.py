@@ -31,6 +31,7 @@ _A_LIGHT = {
     "ink": "#5b3742", "inksoft": "#a07b86", "inkfaint": "#c4a4ad",
     "accent": "#df6486", "accent-ink": "#fff7f9", "accent2": "#efb24c",
     "good": "#5aa86e", "warn": "#e08a3c",
+    "skytop": "#cfe2ee", "skybot": "#f7e2cd",
 }
 _A_NEUTRAL = {
     "desktop": "#cfc7b6", "win": "#f3ede1", "titlebar": "#cdbfa4",
@@ -40,6 +41,7 @@ _A_NEUTRAL = {
     "ink": "#43402f", "inksoft": "#857c64", "inkfaint": "#b3a888",
     "accent": "#8a9a63", "accent-ink": "#fbfdf4", "accent2": "#c08a4f",
     "good": "#6f9a52", "warn": "#bc7e3a",
+    "skytop": "#ced6cc", "skybot": "#e7ddc7",
 }
 _A_DARK = {
     "desktop": "#171110", "win": "#28201c", "titlebar": "#352a22",
@@ -49,6 +51,7 @@ _A_DARK = {
     "ink": "#f1e3d2", "inksoft": "#b6997f", "inkfaint": "#7a6450",
     "accent": "#e3a24f", "accent-ink": "#26190c", "accent2": "#7faf8c",
     "good": "#7cb084", "warn": "#e3a24f",
+    "skytop": "#2a3640", "skybot": "#3a2b1f",
 }
 _B_LIGHT = {
     "desktop": "#ddd2e2", "win": "#f7f1f5", "titlebar": "#d8c2dd",
@@ -58,6 +61,7 @@ _B_LIGHT = {
     "ink": "#4a3a52", "inksoft": "#8d7b94", "inkfaint": "#bcabc2",
     "accent": "#9a5ca6", "accent-ink": "#fbf6fc", "accent2": "#d88aa0",
     "good": "#5aa080", "warn": "#cf8a52",
+    "skytop": "#d4e0ea", "skybot": "#efe0e8",
 }
 _B_NEUTRAL = {
     "desktop": "#c3bcc8", "win": "#e8e2e9", "titlebar": "#bcb0c2",
@@ -67,6 +71,7 @@ _B_NEUTRAL = {
     "ink": "#3b3540", "inksoft": "#7a7180", "inkfaint": "#aaa0b0",
     "accent": "#7d6c8c", "accent-ink": "#f8f5fb", "accent2": "#b07a52",
     "good": "#67996f", "warn": "#b07a52",
+    "skytop": "#c8cdd4", "skybot": "#dad2dc",
 }
 _B_DARK = {
     "desktop": "#120f17", "win": "#221b2a", "titlebar": "#2d2438",
@@ -76,6 +81,7 @@ _B_DARK = {
     "ink": "#ece1f4", "inksoft": "#a695b5", "inkfaint": "#6d5d7e",
     "accent": "#e3a24f", "accent-ink": "#241606", "accent2": "#6fd0d6",
     "good": "#74c9c4", "warn": "#e3a24f",
+    "skytop": "#222a36", "skybot": "#2c2034",
 }
 
 # Direction A: soft corners; Direction B: tighter corners.
@@ -182,10 +188,11 @@ def viewport_colors(key: str) -> dict:
         "cage": p["accent"],
         "cage_points": p["accent2"],
         "cage_wire": p["accent"],
-        # A visible vertical sky: light panel up top falling to the darker desktop
-        # base (menuhover/desktop were nearly identical and read as a flat fill).
-        "sky_top": p["panel"],
-        "sky_bottom": p["desktop"],
+        # The design's dedicated sky tokens: a cool skytop at the radial center fading
+        # to a warm skybot at the corners (a real sky-to-horizon, not a pink-on-pink
+        # fill). VTK puts the gradient's second color (top) at the radial center.
+        "sky_top": p["skytop"],
+        "sky_bottom": p["skybot"],
     }
 
 
@@ -325,6 +332,7 @@ QLabel#themelabel {{ color: {inksoft}; font-size: 9px; font-weight: 700; }}
 QLabel#caption {{ color: {inkfaint}; font-size: 10px; }}
 
 /* Functional window buttons (minimize / maximize / close). */
+QWidget#windots {{ background: transparent; }}
 QToolButton#winmin, QToolButton#winmax, QToolButton#winclose {{
     border: none; border-radius: 6px; padding: 0; }}
 QToolButton#winmin {{ background: {accent2}; }}
