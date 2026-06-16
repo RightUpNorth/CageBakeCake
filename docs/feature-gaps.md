@@ -21,8 +21,13 @@ the edited cage).
   cage to USD in the canonical frame and `CageEditor.save_cage` / File > Save Cage As...
   expose it; loading a cage already existed (`--cage` / resample). The app is now a cage
   *authoring* tool end to end, not just a baker.
-- **[high] Save / load a project / session.** Paths + cage edits + skew map + bake
-  settings in one file, so a cage edit survives a restart and is resumable.
+- **[high] Save / load a project / session. (DONE)** `project.py` writes a `.cbcproj`
+  (JSON) holding the mesh paths, the cage edits (global push + a sparse per-vertex manual
+  delta), the skew map, the bake settings, the recipe and the theme; File > Save Project
+  As... / Open Project... expose it. `CageEditor.authoring_state` / `apply_authoring_state`
+  carry the editor half, mesh paths are stored relative to the project file for
+  portability, and a changed source mesh (vertex-count mismatch) skips just the per-vertex
+  arrays and keeps the rest. So a cage edit now survives a restart and is resumable.
 - **[med] Recent files**, drag-and-drop to open, and remembered window/dock layout.
 - **[low] Persist undo history** (or at least warn on unsaved-edits quit).
 

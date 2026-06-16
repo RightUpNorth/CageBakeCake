@@ -395,6 +395,13 @@ class RecipePanel(QWidget):
     def recipe(self):
         return self._recipe
 
+    def set_recipe(self, rec) -> None:
+        """Replace the working recipe (e.g. restored from a project) and refresh the UI.
+        Like loading a recipe file, the preset selector keeps its label."""
+        self._recipe = rec
+        self.rebuild()
+        self._changed()
+
     def _changed(self) -> None:
         self._on_change(self._recipe)
 
