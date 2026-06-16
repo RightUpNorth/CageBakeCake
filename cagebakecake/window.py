@@ -39,7 +39,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import chrome, theme, win_chrome
+from . import chrome, project, recipe, theme, win_chrome
 from .app import CageEditor
 from .imageview import ImageView
 from .widgets import (
@@ -53,6 +53,7 @@ from .widgets import (
 )
 
 _USD_FILTER = "USD (*.usd *.usdc *.usda);;All files (*)"
+_PROJECT_FILTER = "CageBakeCake project (*.cbcproj);;All files (*)"
 _SLIDER_STEPS = 1000  # integer resolution for the float-valued sliders
 _BAKE_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384]  # normal-map width/height choices
 
@@ -82,6 +83,10 @@ class MainWindow(QMainWindow):
         self._interactor: QtInteractor | None = None
         self.editor: CageEditor | None = None
         self._cancel = False  # set by the Cancel button, polled by the AO bake loop
+        # A saved editor state staged by Open Project, applied to the fresh editor the
+        # next _rebuild creates (and then cleared). None on a plain mesh open.
+        self._pending_editor_state: dict | None = None
+        self._project_path: str | None = None
         self._title_bar: QWidget | None = None
         self._native_chrome = False  # win32 native frameless (Aero Snap kept)
 
@@ -235,6 +240,9 @@ class MainWindow(QMainWindow):
         file_menu = bar.addMenu("&File")
         file_menu.addAction("Open Low Poly...", self._open_low)
         file_menu.addAction("Open High Poly...", self._open_high)
+        file_menu.addSeparator()
+        file_menu.addAction("Open Project...", self._open_project)
+        file_menu.addAction("Save Project As...", self._save_project)
         file_menu.addSeparator()
         file_menu.addAction("Save Cage As...", self._save_cage)
         file_menu.addAction("Export Normal Map...", self._export)
@@ -753,6 +761,15 @@ class MainWindow(QMainWindow):
             plotter=self._interactor,
         )
         self.editor.attach_interaction()
+        # Restore a project's saved edits onto the fresh editor before syncing the dock,
+        # so the widgets reflect the loaded values. Warn if the source mesh changed.
+        if self._pending_editor_state is not None:
+            matched = self.editor.apply_authoring_state(self._pending_editor_state)
+            self._pending_editor_state = None
+            if not matched:
+                self._set_status(
+                    "Project opened, but the low poly's vertex count changed - cage "
+                    "edits and skew were skipped (bake settings kept).")
         self.editor.set_theme(theme.palette_key(self._direction, self._mood))
         self._sync_dock()
         self._refresh_preview()
@@ -985,6 +1002,76 @@ class MainWindow(QMainWindow):
             return
         out = self.editor.save_cage(path)
         self._set_status(f"Saved cage -> {out}")
+
+    # --- project / session --------------------------------------------------
+    def _save_project(self) -> None:
+        """Write the whole session (mesh paths + cage edits + skew + bake settings +
+        recipe + theme) to a .cbcproj so a cage edit survives a restart."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project As", "", _PROJECT_FILTER)
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".cbcproj"
+        base = os.path.dirname(os.path.abspath(path))
+        doc = project.build_document(
+            paths={
+                "low": project.relativize(self._low_path, base),
+                "high": project.relativize(self._high_path, base),
+                "cage": project.relativize(self._cage_path, base),
+                "hdr": project.relativize(self._hdr_path, base),
+            },
+            theme={"direction": self._direction, "mood": self._mood},
+            recipe=self._recipe_panel.recipe(),
+            edits=self.editor.authoring_state(),
+        )
+        project.save(path, doc)
+        self._project_path = path
+        self._set_status(f"Saved project -> {os.path.basename(path)}")
+
+    def _open_project(self) -> None:
+        """Load a .cbcproj: restore the mesh paths, theme and recipe, then rebuild the
+        editor and apply the saved cage edits / skew / bake settings."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", "", _PROJECT_FILTER)
+        if not path:
+            return
+        try:
+            data = project.load(path)
+        except (OSError, ValueError) as exc:  # bad JSON / not a project
+            self._set_status(f"Could not open project: {exc}")
+            return
+        base = os.path.dirname(os.path.abspath(path))
+        paths = data.get("paths") or {}
+        low = project.resolve(paths.get("low"), base)
+        if not low or not os.path.exists(low):
+            self._set_status(f"Project's low poly is missing: {low}")
+            return
+        self._low_path = low
+        self._high_path = project.resolve(paths.get("high"), base)
+        self._cage_path = project.resolve(paths.get("cage"), base)
+        self._hdr_path = project.resolve(paths.get("hdr"), base)
+        self._global_push = None  # the saved edits carry the push
+        self._set_theme_axes((data.get("theme") or {}))
+        if data.get("recipe"):
+            self._recipe_panel.set_recipe(recipe.Recipe.from_dict(data["recipe"]))
+        self._pending_editor_state = data.get("edits")
+        self._project_path = path
+        self._rebuild()       # builds the editor and applies the staged edits
+        self._apply_theme()   # re-skin for the restored direction/mood
+        self._set_status(f"Opened project {os.path.basename(path)}")
+
+    def _set_theme_axes(self, th: dict) -> None:
+        """Set the direction/mood from a loaded project, reflecting them in the title-bar
+        segmented controls (set_current_index does not re-emit, so no feedback loop)."""
+        direction = th.get("direction")
+        mood = th.get("mood")
+        if direction in theme.DIRECTIONS:
+            self._direction = direction
+            self._direction_pick.set_current_index(theme.DIRECTIONS.index(direction))
+        if mood in theme.MOODS:
+            self._mood = mood
+            self._mood_pick.set_current_index(theme.MOODS.index(mood))
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Normal Map", "", "PNG (*.png)")

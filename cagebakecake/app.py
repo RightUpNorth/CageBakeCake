@@ -1070,6 +1070,54 @@ class CageEditor:
         print(f"[save-cage] wrote {out_path}")
         return out_path
 
+    # --- project / session state -------------------------------------------
+    def authoring_state(self) -> dict:
+        """The resumable per-editor edit state for a saved project: global push + the
+        sparse manual delta + the skew map + the bake settings. Pure data (no Qt, no
+        meshes), serialized via cagebakecake/project.py."""
+        from . import project
+
+        st = project.encode_edits(
+            self.global_push, self.manual_delta, self.skew, self.skew_map)
+        st.update(
+            bake_size=[int(self._bake_size[0]), int(self._bake_size[1])],
+            supersample=int(self._supersample),
+            padding=int(self._padding),
+            ao_samples=int(self._ao_samples),
+        )
+        return st
+
+    def apply_authoring_state(self, st: dict) -> bool:
+        """Restore a saved authoring state onto this editor (the cage already loaded for
+        the matching low poly). Bake settings always apply; the per-vertex arrays apply
+        only when the saved vertex count matches the loaded mesh. Returns True if they
+        did, False if the mesh changed underneath the project and they were skipped."""
+        from . import project
+
+        self.set_bake_size(*st.get("bake_size", self._bake_size))
+        self.set_supersample(st.get("supersample", self._supersample))
+        self.set_padding(st.get("padding", self._padding))
+        self.set_ao_samples(st.get("ao_samples", self._ao_samples))
+        push, manual, skew, skew_map, matched = project.decode_edits(
+            st, len(self.manual_delta))
+        if push is not None:
+            self.global_push = float(push)
+        if matched:
+            self.manual_delta = manual
+        self.skew = skew
+        self.skew_map = skew_map
+        # Recompute the firing normals from the restored skew, recompose the cage, and
+        # reset the undo history so the restored state is the new baseline.
+        self.normals = cage.blend_normals(self.hard_normals, self.soft_normals, self.skew_map)
+        self._recompose()
+        self._history = [self.manual_delta.copy()]
+        self._hist_index = 0
+        if self.selected is not None:
+            self._build_gizmo(self.selected)
+            self._rebaseline()
+        self.pl.render()
+        return matched
+
     # --- view toggles -------------------------------------------------------
     def _toggle_high(self) -> None:
         """Show/hide the high poly so it stops occluding the cage and low poly. Tracked so
