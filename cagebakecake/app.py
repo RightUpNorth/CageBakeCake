@@ -179,6 +179,8 @@ class CageEditor:
         self._baked_ao: np.ndarray | None = None      # last AO bake (H,W,3)
         self._baked_curv: np.ndarray | None = None    # last curvature bake (H,W,3)
         self._baked_miss: np.ndarray | None = None    # last ray-miss feedback map (H,W,3)
+        self._face_miss: np.ndarray | None = None      # per-low-face miss class (0/1/2) for the 3D overlay
+        self._miss_overlay_on = False
         self._baked_uv: np.ndarray | None = None
         self._packed_outputs: dict = {}  # filename -> (H,W,4) packed recipe output
         self._normals_glyph_on = False
@@ -591,6 +593,40 @@ class CageEditor:
 
     def toggle_low_normals(self) -> None:
         self.set_low_normals(not self._normals_glyph_on)
+
+    # --- ray-miss 3D overlay ------------------------------------------------
+    def set_miss_overlay(self, on: bool) -> None:
+        """Show/hide a 3D overlay painting the low poly where the last bake's rays missed:
+        orange where the high poly pokes out beyond the cage (too tight), red where
+        nothing was found nearby (too loose). Built from the last bake's per-face class."""
+        self._miss_overlay_on = bool(on)
+        self._build_miss_overlay()
+        self.pl.render()
+
+    def toggle_miss_overlay(self) -> None:
+        self.set_miss_overlay(not self._miss_overlay_on)
+
+    def _build_miss_overlay(self) -> None:
+        """(Re)build the two ray-miss overlay actors (poke=orange, loose=red) from the
+        last bake's per-face miss class, drawn in front of the low poly. A no-op when the
+        overlay is off or nothing has been baked."""
+        for name in ("miss_poke", "miss_loose"):
+            self.pl.remove_actor(name, render=False)
+        if not self._miss_overlay_on or self._face_miss is None:
+            return
+        tris = self._cached_low_tris
+        cls = self._face_miss
+        for name, value, color in (("miss_poke", 1, "orange"), ("miss_loose", 2, "red")):
+            sel = np.nonzero(cls == value)[0]
+            if len(sel) == 0:
+                continue
+            sub = np.empty((len(sel), 4), dtype=np.int64)
+            sub[:, 0] = 3
+            sub[:, 1:] = tris[sel]
+            poly = pv.PolyData(self.low.points, sub.ravel())
+            actor = self.pl.add_mesh(poly, color=color, opacity=0.55, name=name,
+                                     lighting=False, render=False)
+            actor.mapper.SetResolveCoincidentTopologyToPolygonOffset()
 
     # --- helpers ------------------------------------------------------------
     def _nearest_vertex(self, point) -> int:
@@ -1364,14 +1400,15 @@ class CageEditor:
             progress=progress or (lambda m: print(f"[bake] {m}")),
             firing_normals=self.normals,  # skew-blended ray direction (M8.2)
             supersample=self._supersample, padding=self._padding,
-            should_cancel=should_cancel, return_miss=True,
+            should_cancel=should_cancel, return_miss=True, return_face_miss=True,
             ray_mesh=ray_mesh,  # cached BVH in place; rebuilt for an exploded bake
         )
         if result is None:
             self._bake_status("Bake cancelled.")
             self.pl.render()
             return
-        image, self._baked_miss = result  # miss map = ray-miss / projection feedback
+        # miss map = ray-miss / projection feedback; face_miss drives the 3D overlay.
+        image, self._baked_miss, self._face_miss = result
         # Per-point UVs for the lit preview (last corner wins at seams - fine for preview).
         pp_uv = np.zeros((self.low.n_points, 2), dtype=np.float32)
         pp_uv[low_tris.reshape(-1)] = low_uvs.reshape(-1, 2).astype(np.float32)
@@ -1380,6 +1417,7 @@ class CageEditor:
         # Snapshot what was baked, so a later incremental re-bake can find the dirty faces.
         self._baked_cage_points = self.cage.points.copy()
         self._baked_explode = self._explode
+        self._build_miss_overlay()  # refresh the 3D ray-miss overlay if it is showing
         # Show the result lit on the low poly without hiding the cage: shaded + normal map.
         self._normal_map_on = True
         self.set_low_style(True)
@@ -1548,6 +1586,7 @@ class CageEditor:
         self.pl.add_key_event("k", self.toggle_cage_points)
         self.pl.add_key_event("j", self.toggle_cage_wire)
         self.pl.add_key_event("v", self.toggle_low_normals)
+        self.pl.add_key_event("m", self.toggle_miss_overlay)
         self.pl.add_key_event("d", self._deselect)
 
     def run(self) -> None:
