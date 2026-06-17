@@ -86,23 +86,48 @@ def _smooth_up(d, floor, adjacency, iters, lam):
     return d
 
 
-def _nlerp(a, b, t):
-    """Per-vertex normalized linear interpolation from unit `a` to unit `b` by `t` (a (N,)
-    fraction). A cheap stand-in for slerp - close enough over the moderate tilt angles the
-    aim stays clamped to, and it never produces a zero vector for non-antipodal inputs."""
-    t = np.asarray(t, dtype=np.float64)[:, None]
-    v = a * (1.0 - t) + b * t
-    return v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-12)
+def _slerp(a, b, t):
+    """Per-vertex spherical interpolation from unit `a` to unit `b` by `t` (a (N,)
+    fraction). Angle-accurate (the result sits at exactly `t` of the way along the arc), so
+    it is the right tool for a tilt-angle clamp; falls back to a normalized lerp when the two
+    directions nearly coincide (the arc is ill-defined there)."""
+    t = np.asarray(t, dtype=np.float64)
+    cos = np.clip(np.sum(a * b, axis=1), -1.0, 1.0)
+    ang = np.arccos(cos)
+    s = np.sin(ang)
+    small = s < 1e-6
+    safe = np.where(small, 1.0, s)
+    wa = (np.sin((1.0 - t) * ang) / safe)[:, None]
+    wb = (np.sin(t * ang) / safe)[:, None]
+    out = wa * a + wb * b
+    lerp = a * (1.0 - t[:, None]) + b * t[:, None]
+    out = np.where(small[:, None], lerp, out)
+    return out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-12)
 
 
 def _clamp_to_cone(base, target, max_deg):
     """Limit each `target` direction to within `max_deg` of `base` (both unit), so the aimed
-    firing direction stays a bounded tilt off the normal rather than a wild flip."""
+    firing direction stays a bounded tilt off the normal rather than a wild flip. Uses slerp
+    so `max_deg` is a true bound (the result never tilts past the cap)."""
     cos = np.clip(np.sum(base * target, axis=1), -1.0, 1.0)
     ang = np.arccos(cos)
     maxr = np.radians(float(max_deg))
     frac = np.where(ang > 1e-9, np.minimum(1.0, maxr / np.maximum(ang, 1e-9)), 0.0)
-    return _nlerp(base, target, frac)
+    return _slerp(base, target, frac)
+
+
+def _smooth_vec(vecs, adjacency, iters, lam=0.5):
+    """Laplacian-relax a per-vertex vector field toward each vertex's neighbour average.
+    Used on the aim *deviation* (firing minus the base normal), not the absolute firing
+    direction - smoothing absolute directions cancels across creases, whereas the deviation
+    is a small tangent offset that smooths cleanly while the per-vertex base normal keeps the
+    surface curvature."""
+    v = np.asarray(vecs, dtype=np.float64).copy()
+    for _ in range(int(iters)):
+        nb = np.array([v[a].mean(axis=0) if len(a) else v[i]
+                       for i, a in enumerate(adjacency)])
+        v = (1.0 - lam) * v + lam * nb
+    return v
 
 
 def aim_targets(high_points, high_normals, low_points, base_firing, max_tilt_deg):
@@ -128,7 +153,7 @@ def solve(low_points, low_tris, firing_normals, high_points, high_tris, *,
           ray_mesh=None, default_push=None, adjacency=None,
           margin=0.05, search_frac=0.5, smooth_iters=10, lam=0.5,
           max_rounds=6, growth=1.6, resolution=256,
-          max_tilt_deg=60.0, aim_strength=1.0, progress=None):
+          max_tilt_deg=60.0, aim_strength=1.0, aim_smooth_iters=8, progress=None):
     """Solve the cage so it encloses the high poly, returning
     ``{"offsets": d (N,), "firing": (N,3)}``: the per-vertex offset (distance from base
     along the firing direction) and the per-vertex firing direction the offsets are measured
@@ -169,7 +194,17 @@ def solve(low_points, low_tris, firing_normals, high_points, high_tris, *,
                and high_normals is not None)
     if tilt_on:
         targets = aim_targets(high_points, high_normals, low_points, base_firing, max_tilt_deg)
-        firing = _nlerp(base_firing, targets, np.full(n, float(aim_strength)))
+        aimed = _slerp(base_firing, targets, np.full(n, float(aim_strength)))
+        # Smooth the aim *deviation* (not the absolute direction) so noisy nearest-surface
+        # normals do not spike the cage, then re-clamp to the per-vertex cone so the smoothed
+        # firing still respects max_tilt_deg and never flips past the base normal.
+        if int(aim_smooth_iters) > 0:
+            dev = _smooth_vec(aimed - base_firing, adjacency, aim_smooth_iters)
+            firing = base_firing + dev
+            firing = firing / (np.linalg.norm(firing, axis=1, keepdims=True) + 1e-12)
+            firing = _clamp_to_cone(base_firing, firing, max_tilt_deg)
+        else:
+            firing = aimed
         tilted = np.degrees(np.arccos(np.clip(np.sum(firing * base_firing, axis=1), -1, 1)))
         notify(f"aimed firing toward nearest high surface (max tilt {tilted.max():.0f} deg)")
     else:

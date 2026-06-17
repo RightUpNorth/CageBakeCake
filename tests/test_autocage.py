@@ -102,8 +102,8 @@ def test_clamp_to_cone_limits_tilt_angle():
     steep = np.tile(np.array([1.0, 0.0, 0.1]) / np.linalg.norm([1.0, 0.0, 0.1]), (5, 1))
     out = autocage._clamp_to_cone(base, steep, 30.0)
     ang = np.degrees(np.arccos(np.clip(np.sum(out * base, axis=1), -1.0, 1.0)))
-    assert np.all(ang <= 30.0 + 1e-6)     # clamped to the cone (never exceeds the cap)
-    assert np.all(ang > 24.0)             # the steep (84 deg) target is held near the cap
+    assert np.all(ang <= 30.0 + 1e-6)     # slerp clamp is a true bound (never exceeds)
+    assert np.all(ang > 29.9)             # the steep (84 deg) target sits exactly at the cap
 
 
 def test_aim_targets_point_along_nearest_high_normal():
