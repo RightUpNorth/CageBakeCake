@@ -340,7 +340,9 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         container = QWidget()
-        container.setFixedWidth(376)  # design: fixed-width controls dock
+        # A minimum (not fixed) width: the dock keeps a sensible floor but stays resizable
+        # by dragging its edge, and the scroll content adapts to whatever width it is given.
+        container.setMinimumWidth(320)
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -577,9 +579,13 @@ class MainWindow(QMainWindow):
         # laid out inside the button (child labels pass clicks through to the button).
         self._bake_recipe_btn = QPushButton()
         self._bake_recipe_btn.setObjectName("primary")
+        # The button hosts a two-line label (title + subtitle); without a real minimum
+        # height the QSS padding and this inner layout's margins stack and squeeze the two
+        # lines into each other. Give it room for both lines.
+        self._bake_recipe_btn.setMinimumHeight(58)
         self._bake_recipe_btn.clicked.connect(self._bake_recipe)
         bl = QHBoxLayout(self._bake_recipe_btn)
-        bl.setContentsMargins(14, 10, 14, 10)
+        bl.setContentsMargins(14, 8, 14, 8)
         bl.setSpacing(10)
         text_col = QVBoxLayout()
         text_col.setSpacing(1)
@@ -626,6 +632,7 @@ class MainWindow(QMainWindow):
 
         dock.setWidget(container)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.resizeDocks([dock], [376], Qt.Horizontal)  # open at the design width, resizable
         self._on_recipe_change(self._recipe_panel.recipe())  # seed the button subtitle
 
     def _build_central(self) -> None:
