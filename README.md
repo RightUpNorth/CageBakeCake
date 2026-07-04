@@ -64,9 +64,7 @@ pyvista window), `--screenshot out.png` (headless render and exit).
 
 ## License
 
-Proprietary and commercial. Copyright (c) 2026 RightUpNorth. All rights reserved.
-See [LICENSE](LICENSE). Use requires a written commercial license agreement;
-contact [email removed].
+MIT. Copyright (c) 2026 Wim Van Brussel / RightUpNorth. See [LICENSE](LICENSE).
 
 ## Documentation
 
