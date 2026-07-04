@@ -14,8 +14,20 @@ setup out of the box.
 """
 
 import argparse
+import os
 
 from .app import CageEditor
+
+
+def _prompt_for_low_mesh() -> str | None:
+    """File dialog fallback for installs that ship no example meshes (the binary
+    build - assets/usd is not in git). Returns None if the user cancels."""
+    from qtpy.QtWidgets import QApplication, QFileDialog
+
+    QApplication.instance() or QApplication([])
+    path, _ = QFileDialog.getOpenFileName(
+        None, "Open Low Poly", "", "USD (*.usd *.usda *.usdc);;All files (*)")
+    return path or None
 
 
 def main() -> None:
@@ -80,8 +92,18 @@ def main() -> None:
     else:
         from .window import launch
 
+        low, high = args.low, args.high
+        # The Mat Ball defaults only exist in a dev checkout with local assets.
+        # If the *default* is missing, ask for a mesh instead of crashing; an
+        # explicitly passed path that is missing still fails loudly as before.
+        if low == parser.get_default("low") and not os.path.exists(low):
+            low = _prompt_for_low_mesh()
+            if not low:
+                return
+            if high == parser.get_default("high") and not os.path.exists(high):
+                high = None
         launch(
-            args.low, high_path=args.high, cage_path=args.cage, hdr_path=args.hdr,
+            low, high_path=high, cage_path=args.cage, hdr_path=args.hdr,
             global_push=args.push,
         )
 

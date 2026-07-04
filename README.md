@@ -62,6 +62,16 @@ With no arguments it opens on the bundled Mat Ball low/high pair. Useful flags:
 `--cage cage.usdc`, `--hdr env.hdr`, `--push <world units>`, `--no-qt` (standalone
 pyvista window), `--screenshot out.png` (headless render and exit).
 
+## Download (alpha)
+
+Prebuilt Windows binaries are attached to
+[GitHub Releases](../../releases): download `CageBakeCake-windows-x64.zip`,
+unzip anywhere, and run `CageBakeCake.exe` (no Python needed). Builds are
+unsigned, so SmartScreen will warn on first launch - "More info" > "Run
+anyway". If it fails to start, run `CageBakeCake-console.exe` and report the
+printed error. Binaries are built by `.github/workflows/release.yml` whenever
+a `v*` tag is pushed.
+
 ## License
 
 MIT. Copyright (c) 2026 Wim Van Brussel / RightUpNorth. See [LICENSE](LICENSE).

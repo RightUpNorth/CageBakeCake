@@ -1,0 +1,62 @@
+
+# Alpha binary build for non-developers: PyInstaller one-folder bundle on
+# Windows, zipped and attached to a GitHub Release.
+#
+# Trigger by pushing a tag like v0.0.1-alpha (creates/updates the release),
+# or run manually via workflow_dispatch (artifact only, no release).
+
+name: build-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build bundle
+        run: pyinstaller cagebakecake.spec --noconfirm
+
+      - name: Smoke test (console exe imports and prints help)
+        run: dist/CageBakeCake/CageBakeCake-console.exe --help
+
+      - name: Zip
+        run: Compress-Archive -Path dist/CageBakeCake -DestinationPath CageBakeCake-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CageBakeCake-windows-x64
+          path: CageBakeCake-windows-x64.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: CageBakeCake-windows-x64.zip
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Rough alpha build for Windows (unsigned).
+
+            **Install:** download `CageBakeCake-windows-x64.zip`, unzip anywhere,
+            double-click `CageBakeCake.exe`. Windows SmartScreen will warn because
+            the build is unsigned - click "More info" then "Run anyway".
+
+            If the app fails to start, run `CageBakeCake-console.exe` instead and
+            report the error text it prints.
