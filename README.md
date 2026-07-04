@@ -7,7 +7,7 @@ shape the cage, see problems before you bake, then bake and pack your maps.
 No DCC required, no license fees, no accounts. Free and open source (MIT) -
 in these crazy times artists deserve more free stuff.
 
-![The app: low poly + cage over the high poly, UV layout, and the cage controls](screenshots/app/step1_open.png)
+![The app: the cage around a normal-mapped low poly, with the baked map in the 2D pane and tray](screenshots/app/hero.png)
 
 ## What is a bake cage?
 

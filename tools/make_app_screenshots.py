@@ -115,6 +115,14 @@ for attr in ("cage_actor", "_cage_pts_actor", "_cage_wire_actor"):
         actor.SetVisibility(False)
 shot("step5_baked.png")
 
+# Hero (the README's first image): the whole story in one frame - the translucent
+# cage around the normal-mapped low poly, the baked map in the 2D pane and tray.
+for attr in ("cage_actor", "_cage_pts_actor", "_cage_wire_actor"):
+    actor = getattr(ed, attr, None)
+    if actor is not None:
+        actor.SetVisibility(True)
+shot("hero.png")
+
 # Theme gallery: two directions x three moods.
 for d_idx, d_name in enumerate(theme.DIRECTIONS):
     for m_idx, m_name in enumerate(theme.MOODS):
