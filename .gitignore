@@ -31,6 +31,9 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...but our PyInstaller spec is hand-written and must ship (the release
+# workflow builds from it).
+!cagebakecake.spec
 
 # Installer logs
 pip-log.txt
